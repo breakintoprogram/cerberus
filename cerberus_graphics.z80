@@ -1,0 +1,323 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 Graphics Routines
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+
+
+			MODULE	CERBERUS_GRAPHICS 
+
+; Pixel table
+;
+PIXEL_TABLE:		DB	0x20, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
+			DB	0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81, 0xA0
+
+; Clear the screen
+;
+CLG:
+CLS:			LD	HL, Video_RAM
+			LD	DE, Video_RAM + 1
+			LD	BC, (CHAR_COLS * CHAR_ROWS) - 1
+			LD	(HL), 32
+			LDIR 
+			XOR	A
+			LD	(CHARPOS_X), A 
+			LD	(CHARPOS_Y), A
+			RET
+
+; Vertical scroll routines
+;
+Scroll_Down:		RET
+;
+Scroll_Up:		LD	HL, Video_RAM + CHAR_COLS
+			LD	DE, Video_RAM
+			LD	BC, CHAR_COLS * (CHAR_ROWS - 1)
+			LDIR 
+			LD	H, D 
+			LD	L, E 
+			INC	DE 
+			LD	BC, CHAR_COLS - 1
+			LD	(HL), 32 
+			LDIR
+			RET
+
+; Get a character off screen
+;  L: X coordinate
+;  H: Y coordinate
+; Returns:
+;  A: ASCII character, or 0xFF if no match
+;  F: C if character match, otherwise NC
+;
+Get_Char:		PUSH	HL
+			CALL	Get_Char_Address
+			LD	A, (HL)
+			POP	HL
+			SCF
+			RET 
+
+; Print a single character out to an X/Y position
+;  A: Character to print
+;  L: X Coordinate
+;  H: Y Coordinate
+;
+Print_Char:		PUSH	HL
+			CALL	Get_Char_Address
+			LD	(HL), A 
+			POP	HL
+			RET
+;
+Get_Char_Address:	PUSH	AF
+			PUSH	DE
+			LD	E, L		; DE: X coordinate, screen address
+			LD	D, high Video_RAM
+			LD	A, H		; First do H * 40; we can do up to x 5 in 8 bits
+			ADD	A, A		; x 2
+			ADD	A, A 		; x 4
+			ADD	A, H		; x 5 
+			LD	L, A		; And do the rest in 16 bits
+			LD	H, 0
+			ADD	HL, HL 		; x 10
+			ADD	HL, HL 		; x 20
+			ADD	HL, HL 		; x 40
+			ADD	HL, DE 
+			POP	DE
+			POP	AF
+			RET
+
+; Boundary check
+; DE: X
+; HL: Y
+; Returns
+;  F: Carry set if on screen
+;
+Pixel_Bounds_Check:	RET	
+
+; Scale X and Y coordinates
+; DE: X (0 to 1279) -> (0 to 39)
+; HL: Y (0 to 1023) -> (0 to 29)
+; 
+Transform_Coords:	RET
+
+; POINT(x,y)
+; Read a point off the screen
+; DE: X
+; HL: Y
+; Returns:
+;  A: Point value
+;
+Point:			RET
+		
+; PLOT n,x,y
+; Graphics Operations
+;  L: X
+;  H: Y
+;  A: Type
+;
+Plot:			JP 	Plot_Point 
+
+; Plot_Line
+;  L: X
+;  H: Y
+;
+Plot_Line:		LD	BC, (PLOTPOS_X)		; BC: (X1, Y1)
+			EX	DE, HL 			; DE: (X2, Y2)
+			JP 	Draw_Line
+
+; ----------------------------------------------------------------------------
+; Graphics Primitives
+; ----------------------------------------------------------------------------	
+
+; PLOT x,y
+;  L: X
+;  H: Y
+;
+Plot_Point:		PUSH	BC 
+			PUSH	DE 
+			PUSH	HL 
+			LD	A, 1
+			SRL 	L
+			JR	NC, 1F 
+			RLCA
+1:			SRL 	H 
+			JR	NC, 2F 
+			RLCA
+			RLCA 
+2:			LD	E, A 			; Store the pixel byte data in E
+			CALL 	Get_Char_Address	; Get the screen character address in HL
+			LD	A, (HL)			; Get the character byte value off screen
+			PUSH	HL
+			CALL	Char_To_Pixel		; Convert to a pixel bitmask
+			POP	HL
+			OR	E 			; A: Combined pixel and screen values
+			LD	DE, PIXEL_TABLE		; Now convert back to a character value
+			ADD	A, E 
+			LD	E, A 
+			ADC  	A, D 
+			SUB 	E 
+			LD 	D, A 
+			LD	A, (DE)			; Get the new pixel value from the table
+			LD	(HL), A			; And store on screen
+			POP	HL 
+			POP	DE 
+			POP	BC
+			RET
+
+; Lookup a pixel value from the pixel table
+;  A: Character to lookup
+; Returns:
+;  A: Pixel bitmask (0 to 15)
+;  F: Carry if pixel found - if not found then will reset character to space (0)
+;
+Char_To_Pixel:		LD	HL, PIXEL_TABLE
+			LD	B, 16 
+			LD	C, 0 
+1:			CP	(HL)
+			JR	Z, 2F
+			INC	HL
+			INC	C 
+			DJNZ	1B
+			XOR	A 
+			RET 
+2:			LD	A, C
+			SCF 
+			RET 			
+
+; Draw Line routine
+; B = Y pixel position 1
+; C = X pixel position 1
+; D = Y pixel position 2
+; E = X pixel position 2
+;
+Draw_Line:		LD	A, D			; Check whether we are going to be drawing up
+			CP	B
+			JR	NC, 1F
+
+			PUSH	BC			; If we are, then this neat trick swaps BC and DE
+			PUSH	DE			; using the stack, forcing the line to be always
+			POP	BC			; drawn downwards
+			POP	DE
+;
+; At this point we have
+; BC = Start coordinate (B=Y1, C=X1)
+; DE = End coordinates  (D=Y2, E=X2)
+;
+1:			LD	H, B 			; HL: Pixel address
+			LD	L, C 
+
+			LD	A, D			; Calculate the line height in B (Y2-Y1)
+			SUB	B
+			LD	B, A
+
+			LD	A, E			; Calculate the line width in C (X2-X1)
+			SUB	C
+			JR	C, Draw_Line_RL
+			LD	C, A 
+;
+; This is for lines drawn left to right
+;
+Draw_Line_LR 		OR	B 
+			JP	Z, Plot_Point		; If so, just plot a single point
+;
+; At this point
+; HL = Pixel start coordinates for plot
+; DE = End coordinates
+;  B = Line height (YL)
+;  C = Line width (XL) - this could be negative for lines drawn 
+;
+	 		LD 	A, B			; Work out which diagonal we are on
+			CP	C
+			JR	NC, Draw_Line_LR_Q2
+;
+; This bit of code draws the line where B < C (more horizontal than vertical)
+;
+Draw_Line_LR_Q1:	LD	D, C			; D = XL
+			LD	C, B			; C = YL
+			LD	B, D   			; B = XL (loop counter)
+			LD	E, D  			; E = XL
+			SRL	E			; E = XL / 2 (error)
+1:			CALL 	Plot_Point		; Plot the pixel
+			LD	A, E			; Add the line height to the error (E = E - YL)
+			SUB	C
+			LD	E, A
+			JR 	NC, 2F
+			ADD	A, D			; Add the line width to the error (E = E + XL) 
+			LD	E, A
+			INC	H 			; Move down one pixel
+2:			INC	L			; Move to adjacent screen address
+			DJNZ 	1B			; Loop until the line is drawn
+			JP	Plot_Point 		; Plot the final point
+;
+; This bit draws the line where B>=C (more vertical than horizontal, or diagonal)
+;
+Draw_Line_LR_Q2:	LD	D, B 			; D = YL
+			LD	E, B			; E = YL
+			SRL	E			; E = YL / 2 (error)
+1:			CALL	Plot_Point		; Plot the pixel
+			LD	A, E			; Add the line width to the error
+			SUB	C
+			LD	E, A 
+			JR	NC, 2F			; Skip the next bit if we don't get a carry
+			ADD	A, D 			; Add the line height to the error (E = E + XL) 
+			LD	E, A 
+			INC	L			; Move to adjacent screen address; more self modifying code
+2:			INC 	H 
+			DJNZ	1B
+			JP 	Plot_Point 
+
+;
+; This is for lines drawn right to left
+;
+Draw_Line_RL		NEG 				; Make the line width positive
+			LD	C, A
+			OR	B 
+			JP	Z, Plot_Point		; If so, just plot a single point
+;
+; At this point
+; HL = Pixel coordinates for plot
+;  B = Line height (YL)
+;  C = Line width (XL) - this could be negative for lines drawn 
+;
+	 		LD 	A, B			; Work out which diagonal we are on
+			CP	C
+			JR	NC, Draw_Line_RL_Q2
+;
+; This bit of code draws the line where B < C (more horizontal than vertical)
+;
+Draw_Line_RL_Q1:	LD	D, C			; D = XL
+			LD	C, B			; C = YL
+			LD	B, D   			; B = XL (loop counter)
+			LD	E, D  			; E = XL
+			SRL	E			; E = XL / 2 (error)
+1:			CALL 	Plot_Point		; Plot the pixel
+			LD	A, E			; Add the line height to the error (E = E - YL)
+			SUB	C
+			LD	E, A
+			JR 	NC, 2F
+			ADD	A, D			; Add the line width to the error (E = E + XL) 
+			LD	E, A
+			INC	H 			; Move down one pixel
+2:			DEC	L			; Move to adjacent screen address
+			DJNZ 	1B			; Loop until the line is drawn
+			JP	Plot_Point 		; Plot the final point
+;
+; This bit draws the line where B>=C (more vertical than horizontal, or diagonal)
+;
+Draw_Line_RL_Q2:	LD	D, B 			; D = YL
+			LD	E, B			; E = YL
+			SRL	E			; E = YL / 2 (error)
+1:			CALL	Plot_Point		; Plot the pixel
+			LD	A, E			; Add the line width to the error
+			SUB	C
+			LD	E, A 
+			JR	NC, 2F			; Skip the next bit if we don't get a carry
+			ADD	A, D 			; Add the line height to the error (E = E + XL) 
+			LD	E, A 
+			DEC	L			; Move to adjacent screen address; more self modifying code
+2:			INC 	H 
+			DJNZ	1B
+			JP 	Plot_Point 
+
+			ENDMODULE

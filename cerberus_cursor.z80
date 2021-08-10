@@ -1,0 +1,22 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 Cursor Routines
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+
+			MODULE	CERBERUS_CURSOR
+
+; Initialise the cursor
+;
+Initialise:		RET
+
+; Set cursor visibility
+; 0: Off
+; 1: On
+;
+Display:		RET
+
+			ENDMODULE

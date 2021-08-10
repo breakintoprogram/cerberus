@@ -1,0 +1,279 @@
+;
+; Title:	BBC Basic for Cerberus 2080 - Editor
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+
+			MODULE EDITOR
+
+; Read/edit a complete line, terminated by CR.
+;  HL: Addresses destination buffer. Must be on a page boundary
+; Returns:
+; Buffer filled, terminated by CR.
+;   A: 0
+; Destroys: A,BC,DE,HL,IX,F
+;
+Edit_Line:		LD	(HL), CR		; Initialise buffer
+			LD	A, (FLAGS)		; If ESC flag is set, then do nothing
+			OR	A 
+			LD	A, 0
+			RET	M
+			LD	DE, (CHARPOS_X)		; Update the cursor position
+			LD	(CURSOR_X), DE
+1:			LD 	A, (KEY_CODE)		; Wait until we've let go of ESC
+			CP	0x1B			 
+			JR	Z, 1B
+;
+Edit_Line_Loop:		LD	A, 1			; Cursor on
+			CALL	CERBERUS_CURSOR.Display
+			CALL	OSRDCH			; Wait for character input
+			LD	C, A 			; Take a copy of the character
+			XOR	A
+			CALL	CERBERUS_CURSOR.Display	; Cursor off
+			CALL	LTRAP			; Check for escape
+;
+			LD	A, (FLAGS)		; Get the flags in B
+			LD	B, A
+			LD	DE, (CURSOR_X)		; Cursor position
+;
+			LD	A, C			; Check keyboard edit commands
+			CP	0x7F			; 0x7F: DEL Delete
+			JP	Z, Key_DEL
+			SUB	0x08			; 0x08: BS Back one character
+			JR	Z, Key_BS
+			DEC	A			; 0x09: HT Advance one character
+			JP	Z, Key_HT
+			DEC	A			; 0x0A: LF Down one character
+			JP	Z, Key_LF
+			DEC	A			; 0x0B; VT Up one character
+			JP	Z, Key_VT
+			SUB	0x02			; 0x0D: CR Enter
+			JR	Z, Key_CR
+;
+			LD	A, C			; Is it a printable character? 
+			CP	32
+			JR	C, Edit_Line_Loop	; No, so skip
+;			
+			LD	E, 0			; Get length of current line
+			CALL	Get_Length
+			LD	A, B 
+			CP	255			
+			JR	NC, Edit_Line_Loop	; Skip if line limit (255) exceeded
+;
+			CALL	Insert			; Insert the character into the buffer
+			LD	(HL), C			; Store the character
+			CALL	Update_1		; Update characters from cursor position
+			DEC	B
+			CALL	NZ, Update_2
+			INC	L			; Move the cursor
+			LD	DE, (CHARPOS_X)		; Update the cursor position
+			LD	(CURSOR_X), DE
+			JR	Edit_Line_Loop
+
+; Enter pressed
+;
+Key_CR:			LD	A, (HL)			; Move the cursor to the end of the line
+			CP	CR
+			JR	Z, 1F 
+			INC	L 
+			LD	A, 0x09: CALL OSWRCH
+			JR	Key_CR
+1:			LD	A, (FLAGS)		
+			AND	%11101111		; Reset the copy bit
+			LD	(FLAGS), A
+			CALL	CRLF			; Display CRLF
+			XOR	A			; Return A = 0
+			RET  
+
+; Cursor Left
+;
+Key_BS:			BIT	4, B			; Are we in COPY mode?
+			JR	Z, 1F		
+			CALL 	Move_Cursor_Left	
+			LD	(CURSOR_X), DE
+			JP	Edit_Line_Loop
+1:			INC	L 			
+			DEC	L 			; Check for cursor at beginning of line
+			JP	Z, Edit_Line_Loop	; If we are, then do nothing
+			DEC	L			; Move the cursor back
+Key_Out:		LD	A, C
+			CALL	OSWRCH			; Echo character back to terminal
+			LD	DE, (CHARPOS_X)		; Update the cursor position
+			LD	(CURSOR_X), DE
+			JP	Edit_Line_Loop		; Loop
+
+; Cursor Right
+;
+Key_HT:			BIT	4, B			; Are we in COPY mode?
+			JR	Z, 2F		
+Key_HT_1:		CALL	Move_Cursor_Right
+			LD	(CURSOR_X), DE
+			JP	Edit_Line_Loop
+2:			LD	A, (HL)			
+			CP	CR			; Are we at the end of line? (marked with a CR)
+			JP	Z, Edit_Line_Loop	; Yes, so do nothing
+			INC	L			; Advance the cursor
+			JR	Key_Out			; Echo character back to terminal			
+
+; Cursor Down 
+;
+Key_LF:			BIT	4, B			; Are we in COPY mode?
+			JR	Z, 1F		
+			CALL	Move_Cursor_Down	
+			LD	(CURSOR_X), DE
+			JP	Edit_Line_Loop
+1:			LD	E, 0			
+			CALL	Get_Length 		; Get length of line in B from start of buffer (E=0)
+			LD	A, CHAR_COLS			
+			ADD	A, L			; Down one line
+			CP	B 			; Check with line length
+			JR 	C, 2F			
+			JP	NZ, Edit_Line_Loop
+2:			LD 	L, A 
+			JR	Key_Out			; Echo character back to terminal
+
+; Cursor Up
+;
+Key_VT:			BIT	4, B			; Are we in COPY mode?
+			JR	Z, 1F			
+			CALL	Move_Cursor_Up		; Yes, so just move the cursor
+			LD	(CURSOR_X), DE
+			JP	Edit_Line_Loop
+1:			LD	A, -CHAR_COLS
+			ADD	A, L 			; Up one line
+			JP	NC, Edit_Line_Loop	; If it takes us past the beginning of the line then do nothing
+			LD	L, A 			; Store
+			JR	Key_Out			; Echo character back to terminal
+
+; Delete
+;
+Key_DEL:		BIT	4, B			; Are we in COPY mode?
+			JR	NZ, 2F			; Yes, so do copy
+			INC	L			; Check for input ptr at beginning of line
+			DEC	L 
+			JR	Z, 1F
+			CALL	Delete
+			DEC	L
+			LD	A, 0x08: CALL OSWRCH
+			CALL	Update_1
+			LD	A, 0x20: CALL OSWRCH
+			INC	B
+			CALL	Update_2
+			LD	DE, (CHARPOS_X)		; Update the cursor position
+			LD	(CURSOR_X), DE
+1:			JP	Edit_Line_Loop
+;
+2:			PUSH	DE
+			LD	E, 0			; Check whether we can insert
+			CALL	Get_Length		; Get length of current line
+			POP	DE
+			LD	A, B 
+			CP	255			
+			JR	NC, 1B			; Skip if line limit (255) exceeded
+;
+			PUSH	DE
+			PUSH	HL
+			EX	DE, HL 
+			CALL	CERBERUS_GRAPHICS.Get_Char
+			POP	HL
+			POP	DE
+			JR	NC, 1B
+			PUSH	DE
+			CALL	Insert			; Insert the character into the buffer
+			LD	(HL), C			; Store the character
+			CALL	Update_1		; Update characters from cursor position
+			DEC	B
+			CALL	NZ, Update_2
+			INC	L
+			POP	DE
+			JP	Key_HT_1
+
+; Get line length
+;  E: Start pointer value in buffer
+; Returns
+;  B: Number of characters, excluding CR
+;
+Get_Length_From_Cursor:	LD	E, L
+Get_Length:		LD	B, 0
+			LD	D, H
+1:			LD	A, (DE)
+			CP	CR
+			RET	Z 
+			INC	B 
+			INC	E
+			JR	1B
+
+; Move cursor
+; DE: Cursor position
+;
+Move_Cursor_Left:	EQU	DEC_E_NZ		; In misc.z80
+Move_Cursor_Up:		EQU	DEC_D_NZ		; In misc.z80
+;
+Move_Cursor_Right:	LD	A, CHAR_COLS - 1
+			INC	E 
+			CP	E
+			RET	NC
+			LD	E, 0 
+;
+Move_Cursor_Down	LD	A, CHAR_ROWS - 1
+			INC	D
+			CP	D 
+			RET 	NC 
+			DEC 	D
+			RET 
+
+; Update from cursor position
+;  L: Cursor position
+;
+Update_1:		LD	D, H			; DE: Current cursor position
+			LD	E, L
+			LD	B, 0			; B: Number of characters output
+1:			LD	A, (DE)			; Read buffer
+			CP	CR 			; Skip if CR
+			RET	Z		
+			CALL	OSWRCH			; Print the character out
+			INC	E 			
+			INC	B			; Increment # of chars output
+			JR	1B 			; And loop
+
+; Backspace a number of characters 
+;  B: Character count
+;
+Update_2:		INC	B			; Is B=0 (EOL)
+			DEC	B 	
+			RET	Z			
+			LD	A, 0x08			; Restore cursor position
+3:			CALL	OSWRCH
+			DJNZ	3B 
+			RET 
+
+; Insert character
+;  C: Character to insert
+;  L: Cursor position
+;
+Insert:			CALL	Get_Length_From_Cursor	
+			INC	B			; Need to loop at least once
+1:			LD	A, (DE)
+			INC	E
+			LD	(DE), A 
+			DEC	E 
+			DEC	E
+			DJNZ	1B
+			RET
+
+; Delete character
+;  L: Cursor position
+Delete:			CALL	Get_Length_From_Cursor
+			INC	B
+			LD	E, L
+1:			LD	A, (DE)
+			DEC	E 
+			LD	(DE), A
+			INC	E 
+			INC 	E
+			DJNZ	1B
+			RET
+
+			ENDMODULE

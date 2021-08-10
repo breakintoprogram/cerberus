@@ -1,0 +1,82 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		RAM Module for BBC Basic Interpreter
+;		For use with Version 2.0 of BBC BASIC
+;		Standard CP/M Distribution Version
+; Author:	(C) Copyright  R.T.Russell 31-12-1983
+; Modified By:	Dean Belfield
+; Created:	02/05/2021
+; Last Updated:	09/08/2021
+;
+; Modinfo:
+; 02/05/2021:	Modified by Dean Belfield to assemble with SJASMPLUS
+; 09/08/2021:	Added all variables required by Cerberus version of BBC basic
+
+			MODULE RAM
+
+			ALIGN 256
+
+Start:			EQU 	$
+;
+;n.b. ACCS, BUFFER & STAVAR must be on page boundaries.
+;
+@ACCS:			DEFS    256             ;STRING ACCUMULATOR
+@BUFFER:		DEFS    256             ;STRING INPUT BUFFER
+@STAVAR:		DEFS    27*4            ;STATIC VARIABLES
+@OC:			EQU     STAVAR+15*4     ;CODE ORIGIN (O%)
+@PC:			EQU     STAVAR+16*4     ;PROGRAM COUNTER (P%)
+@DYNVAR: 		DEFS    54*2            ;DYN. VARIABLE POINTERS
+@FNPTR:  		DEFS    2               ;DYN. FUNCTION POINTER
+@PROPTR: 		DEFS    2               ;DYN. PROCEDURE POINTER
+;
+@PAGE:   		DEFS    2               ;START OF USER PROGRAM
+@TOP:    		DEFS    2               ;FIRST LOCN AFTER PROG.
+@LOMEM:  		DEFS    2               ;START OF DYN. STORAGE
+@FREE:   		DEFS    2               ;FIRST FREE-SPACE BYTE
+@HIMEM:  		DEFS    2               ;FIRST PROTECTED BYTE
+;
+@LINENO: 		DEFS    2               ;LINE NUMBER
+@TRACEN:		DEFS    2               ;TRACE FLAG
+@AUTONO:		DEFS    2               ;AUTO FLAG
+@ERRTRP:		DEFS    2               ;ERROR TRAP
+@ERRTXT:		DEFS    2               ;ERROR MESSAGE POINTER
+@DATPTR:		DEFS    2               ;DATA POINTER
+@ERL:			DEFS    2               ;ERROR LINE
+@ERRLIN:		DEFS    2               ;"ON ERROR" LINE
+@RANDOM:		DEFS    5               ;RANDOM NUMBER
+@COUNT:			DEFS    1               ;PRINT POSITION
+@WIDTH:			DEFS    1               ;PRINT WIDTH
+@ERR:			DEFS    1               ;ERROR NUMBER
+@LISTON:		DEFS    1               ;LISTO & OPT FLAG
+@INCREM:		DEFS    1               ;AUTO INCREMENT
+;
+; Extra Next-implementation specific system variables
+;
+@VDU_BUFFER:		EQU	ACCS		; Storage for VDU commands
+@DOS_BUFFER:		EQU	ACCS		; Storage for DOS commands
+;
+@FLAGS:			DEFS	1		; Flags: B7=ESC PRESSED, B6=ESC DISABLED
+@KEY_SCAN:		DEFS	2		; Results of last keyscan
+@KEY_COUNT:		DEFS	1		; Key repeat counter
+@KEY_CODE:		DEFS	1		; Keycode updated by keyscan
+@KEY_DELAY:		DEFS	1		; Initial key delay
+@KEY_REPEAT:		DEFS	1		; Key repeat
+@TIME:			DEFS	4	
+@CURSOR_X:		DEFS	1		; Edit cursor position on screen
+@CURSOR_Y:		DEFS	1
+@CHARPOS_X:		DEFS	1		; Current character position on screen
+@CHARPOS_Y:		DEFS	1
+@PLOTORG_X:		DEFS	1		; Plot origin
+@PLOTORG_Y:		DEFS	1
+@PLOTPRE_X:		DEFS	1 		; Previous plot position
+@PLOTPRE_Y:		DEFS	1
+@PLOTPOS_X:		DEFS	1		; Current plot position on screen
+@PLOTPOS_Y:		DEFS	1
+@VDU_STATE:		DEFS	1		; VDU state
+@VDU_PTR:		DEFS	1		; Pointer into VDU buffer
+@VDU_COUNT:		DEFS	1		; VDU count of characters left to read
+@UDG_MASK:		DEFS	1		; Exploded UDG mode mask
+
+Length:			EQU	$ - Start
+
+			ENDMODULE

@@ -1,0 +1,272 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 I/O Routines
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+
+			MODULE	CERBERUS_IO
+
+; Read the keyboard and return an ASCII character code
+; Returns:
+;  A: 0x00 (NUL) if no key pressed
+;
+Read_Keyboard:		LD	A, (Mail_Flag)
+			OR	A 
+			RET	Z
+			XOR	A 
+			LD	(Mail_Flag), A
+			LD	A, (Mail_Box)
+			RET
+
+; Get charpos
+;
+Get_Charpos		LD	HL, (CHARPOS_X)
+			RET
+ 
+; Print a character at the current charpos
+; Destroys nothing
+;
+Print_Char:		PUSH 	AF, BC, DE, HL, IX	; Stack all the registers
+			CALL	1F			; Call the print routine
+			POP	IX, HL, DE, BC, AF
+			RET 
+1:			LD	C, A			; Temporarily store the character
+			LD	A, (VDU_STATE)		; What's the current VDU state?
+			OR	A 			; If not zero...
+			JR	NZ, VDU_READ_BYTES	; Read the data into the VDU buffer and don't output
+			LD	A, C			; Get the character code back
+			CP	32			; Is the character a control routine?
+			JR	C, VDU_CTRL_CHAR	; Yes, so just handle that
+			CP	0x7F			; Is it backspace?
+			JR	Z, VDU_DEL 		; Yes, so deal with that
+			CP	0xA9			; Bodge for Spectrum (C) symbol
+			JR	NZ, 2F
+			LD	A, 0x7F
+2:			CALL	Get_Charpos		; Otherwise print it out		
+			CALL	CERBERUS_GRAPHICS.Print_Char
+			JP	VDU_HT
+
+; &7F DEL - Delete
+;
+VDU_DEL:		CALL	VDU_BS
+			LD	A, " "
+			CALL	Get_Charpos
+			JP	CERBERUS_GRAPHICS.Print_Char
+
+; Just buffer the characters in the VDU buffer
+; Until we have read enough in, then execute the relevant code
+;
+VDU_READ_BYTES:		LD	IX, VDU_STATE		; Indexes - 0: STATE, 1: PTR, 2: COUNT
+			LD	H, high VDU_BUFFER	; HL: VDU buffer
+			LD	L, (IX + 1)		; L: Current position in buffer
+			LD	(HL), C			; Store the character
+			INC	(IX + 1)		; Increase the pointer
+			DEC	(IX + 2)		; Decrease the counter
+			RET	NZ			; If not zero, then return
+			LD	A, (IX + 0)		; Get the state		
+			LD	(IX + 0), 0 		; Clear it
+			DEC	A 			; Index from 1
+			LD	IX, VDU_BUFFER
+			CALL	SWITCH_A
+			DEFW	VDU_EXEC_PLOT		
+			DEFW	VDU_EXEC_TAB 
+			DEFW	VDU_EXEC_GORIGIN
+			DEFW	VDU_EXEC_UDG
+
+; Handle all control characters
+;  A: Character code
+;  C: Character code (copied in Print_Char)
+;
+VDU_CTRL_CHAR:		CALL	SWITCH_A
+			DW 	VDU_NUL			; &00 NUL - Do nothing
+			DW	VDU_NUL			; &01 SOH - Send next character to printer only
+			DW	VDU_NUL			; &02 STX - Start print job
+			DW	VDU_NUL			; &03 ETX - End print job
+			DW	VDU_NUL			; &04 EOT - Write text at text cursor
+			DW	VDU_NUL			; &05 ENQ - Write text at graphics cursor
+			DW	VDU_NUL			; &06 ACK - Enable VDU drivers
+			DW	VDU_NUL			; &07 BEL - Make a short beep
+			DW	VDU_BS			; &08 BS  - Backspace
+			DW	VDU_HT			; &09 HT  - Advance cursor one character
+			DW	VDU_LF			; &0A LF  - Move cursor down one line
+			DW	VDU_VT			; &0B VT  - Move cursor up one line
+			DW	VDU_FF			; &0C FF  - Clear text area (CLS)
+			DW	VDU_CR			; &0D CR  - Move cursor to start of current line
+			DW	VDU_NUL			; &0E SO  - Page mode on
+			DW	VDU_NUL			; &0F SI  - Page mode off
+			DW	VDU_DLE			; &10 DLE - Clear graphcs area (CLG)
+			DW	VDU_NUL			; &11 DC1 - Define text colour (COLOUR n)
+			DW	VDU_NUL			; &12 DC2 - Define graphics colour (GCOL a, n)
+			DW	VDU_NUL			; &13 DC3 - Define logical colour (COLOUR l, r, g, b)
+			DW	VDU_NUL			; &14 DC4 - Restore logical colours
+			DW	VDU_NUL			; &15 NAK - Disable VDU drivers or delete current line
+			DW	VDU_NUL			; &16 SYN - Select screen mode (MODE n)
+			DW	VDU_ETB			; &17 ETB - Define display character and other commands; used by ON and OFF
+			DW	VDU_NUL			; &18 CAN - Define graphics windows
+			DW	VDU_EM			; &19 EM  - PLOT k, x, y (used by MOVE, DRAW, etc)
+			DW	VDU_NUL			; &1A SUB - Restore default windows
+			DW	VDU_NUL			; &1B ESC - Does nothing
+			DW	VDU_NUL			; &1C FS  - Define text window
+			DW	VDU_GS			; &1D GS  - Define graphics origin (ORIGIN)
+			DW	VDU_RS			; &1E RS  - Home
+			DW	VDU_US			; &1F US  - Move text cursor to X, Y (PRINT TAB(x,y));
+
+; &00 NUL - Do nothing
+;
+VDU_NUL:		RET 
+
+; &08 BS  - Backspace
+; 
+VDU_BS:			LD	A, (CHARPOS_X)
+			OR	A
+			JR	Z, 1F
+			DEC	A 
+			LD	(CHARPOS_X), A 
+			RET 
+1:			LD	A, CHAR_COLS - 1
+			LD	(CHARPOS_X), A 
+			JR	VDU_VT
+
+
+; &09: HT  - Advance to next character
+;
+VDU_HT:			LD	A, (CHARPOS_X)
+			INC	A
+			LD	(CHARPOS_X), A 
+			CP	CHAR_COLS
+			RET 	C 
+			CALL	VDU_CR
+
+; &0A LF  - Linefeed
+;
+VDU_LF:			LD	A, (CHARPOS_Y)
+			INC	A 
+			LD	(CHARPOS_Y), A 
+			CP	CHAR_ROWS 
+			RET 	C 
+1:			LD	A, CHAR_ROWS - 1 
+			LD	(CHARPOS_Y), A
+			JP 	CERBERUS_GRAPHICS.Scroll_Up
+
+; &0B VT  - Move cursor up one line
+;
+VDU_VT:			LD	A, (CHARPOS_Y)
+			DEC	A 
+			LD	(CHARPOS_Y), A 
+			RLCA 
+			RET	NC 
+			XOR	A 
+			LD	(CHARPOS_Y), A 
+			JP	CERBERUS_GRAPHICS.Scroll_Down
+
+; &0C FF  - CLS
+;
+VDU_FF:			JP 	CERBERUS_GRAPHICS.CLS
+
+
+; &0D CR  - Carriage Return
+;
+VDU_CR:			XOR	A 
+			LD 	(CHARPOS_X), A
+			RET 
+
+; &10 DLE - CLG
+;
+VDU_DLE:		JP	CERBERUS_GRAPHICS.CLG
+
+; &17 ETB - Define display character and other commands; used by ON and OFF
+;
+VDU_ETB:		LD	B, 9			; 9 bytes (char, b0, b1, ..., b7)
+			LD	A, 4			; State 4: UDG
+			JR	VDU_SET_STATE
+
+; &19 EM  - PLOT k, x, y
+;
+VDU_EM:			LD	B, 5			; 5 bytes (mode, xl, xh, yl, yh)
+			LD	A, 1			; State 1: PLOT
+			JR	VDU_SET_STATE
+
+; &1D GS - Graphics Origin
+;
+VDU_GS:			LD	B, 4			; 4 bytes (OX, OY)
+			LD	A, 3			; State 3: GORIGIN
+			JR	VDU_SET_STATE
+
+; &1E RS  - HOME
+;
+VDU_RS:			XOR	A
+			LD 	(CHARPOS_X), A 
+			LD	(CHARPOS_Y), A
+			RET
+
+; &1F US  - PRINT TAB(x,y);
+;
+VDU_US:			LD	B, 2			; 2 bytes (x, y)
+			LD	A, 2			; State 2: TAB
+			JR	VDU_SET_STATE
+
+; Set up the VDU engine to redirect characters into VDU_BUFFER
+;  A: Code for the state (the VDU character that initialised it, i.e. 25 for PLOT
+;  B: Number of bytes to read before executing the state, i.e. 5 for PLOT
+;
+VDU_SET_STATE:		LD	(VDU_STATE), A
+			LD	A, B
+			LD	(VDU_COUNT), A 
+			XOR	A 
+			LD	(VDU_PTR), A 
+			RET 
+
+; PLOT: VDU 25,mode,x;y;
+;
+VDU_EXEC_PLOT:		LD	HL, (PLOTPOS_X)		; Store the previous plot points
+			LD 	(PLOTPRE_X), HL 
+			LD	HL, (PLOTPOS_Y)
+			LD	(PLOTPRE_Y), HL
+			LD	A, (VDU_BUFFER + 0)	; Plot style 
+			LD	DE, (VDU_BUFFER + 1)	; X
+			LD	HL, (VDU_BUFFER + 3)	; Y
+			LD	(PLOTPOS_X), DE 	; Store new plot points
+			LD	(PLOTPOS_Y), HL
+			JP	CERBERUS_GRAPHICS.Plot
+
+; TAB: VDU 31,x,y
+;
+VDU_EXEC_TAB:		LD	A, (VDU_BUFFER + 0)
+			LD 	(CHARPOS_X), A 
+			LD	A, (VDU_BUFFER + 1)
+			LD	(CHARPOS_Y), A
+			RET 
+
+; Set graphics origin
+; 
+VDU_EXEC_GORIGIN:	LD	HL, (VDU_BUFFER + 0)
+			LD	(PLOTORG_X), HL 
+			LD	HL, (VDU_BUFFER + 2)
+			LD	(PLOTORG_Y), HL 
+			RET 
+
+; Define a UDG
+;
+VDU_EXEC_UDG:		LD	HL, VDU_BUFFER
+			LD	A, (HL)			; Get character code
+			CP	32			; Is it below ASCII 32?
+			RET	C 			; Yes, so do nothing
+			PUSH	HL
+			LD	DE, Character_RAM	; Get character location in character RAM
+			LD	H, 0 
+			LD	L, A
+			ADD	HL, HL 			; Multiply character code by 8
+			ADD	HL, HL
+			ADD	HL, HL 
+			ADD	HL, DE			; Add to base address in character RAM
+			EX 	DE, HL			; DE: Destination address in character RAM
+			POP	HL 			; HL: 8 bytes of VDU data
+			INC	L			; Copy the 8 bytes of character
+			LD	BC, 8			; data into character ram
+			LDIR
+			RET
+
+			ENDMODULE

@@ -1,0 +1,51 @@
+;
+; Title:	BBC Basic for Cerberus 2080 - Main build file
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+;
+
+			DEFINE BUILD_VERSION "0.01"	; Build version
+;
+; Memory map
+;
+Mail_Flag:		EQU 	0x0200
+Mail_Box:		EQU 	0x0201
+Code_Start:		EQU	0x0202			; Code start
+RAM_Top:		EQU	0xEF00			; Top of usable RAM; must be on a page boundary
+Stack_Top:		EQU	0xF000			; Stack at top
+Character_RAM:		EQU	0xF000
+Video_RAM:		EQU	0xF800		
+
+CHAR_COLS:		EQU	40			; Screen width in chars
+CHAR_ROWS:		EQU	30			; Screen height in chars
+
+			ORG 	Code_Start			
+;
+; Cerberus 2080 specific code
+; 
+			include "cerberus_init.z80"	; Cerberus 2080 initialisation
+			include "cerberus_io.z80"	; I/O
+			include "cerberus_graphics.z80"	; Graphics
+			include "cerberus_cursor.z80"	; Cursor
+;
+; Other generic Z80N helper functions
+;
+			include "misc.z80"
+;
+; BBC BASIC for Z80 core code
+;
+			include "main.z80"
+			include "exec.z80"
+			include "eval.z80"
+			include "fpp.z80"
+			include "sorry.z80"
+			include "patch.z80"
+			include "editor.z80"
+			include "ram.z80"
+
+			ALIGN 	256			; USER needs to be alignd to a page boundary
+
+@USER:  		incbin "tests/cube.bbc"		; BASIC program to load into memory

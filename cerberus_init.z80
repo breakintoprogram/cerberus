@@ -1,0 +1,69 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 Initialisation
+; Author:	Dean Belfield
+; Created:	31/07/2021
+; Last Updated:	31/07/2021
+;
+; Modinfo:
+
+			MODULE	CERBERUS_INIT
+
+System:			DI					; Disable the maskable interrupts
+			LD 	SP,Stack_Top			; Stick the stack somewhere safe for now
+
+			CALL	Initialise_RAM
+
+			LD	A, 0xC3				; JP opcode for NMI
+			LD	HL, Interrupt			; Interrupt handler
+			LD	(0x0066), A 			; Store at NMI vector address
+			LD	(0x0067), HL
+
+			CALL    TELL
+			DEFM	"Cerberus 2080 Version ", BUILD_VERSION, "\n\r"
+			DEFM	"\n\r"
+			DEFB    0
+			JP	MAIN.COLD
+;
+; Initialise the RAM
+;
+Initialise_RAM:		LD	HL, RAM.Start
+			LD	BC, RAM.Length
+			LD	E, 0
+1:			LD	(HL), E
+			INC	HL
+			DEC	BC
+			LD	A, B 
+			OR	C 
+			JR	NZ, 1B
+			RET
+;
+; Interrupt routine
+;
+Interrupt:		PUSH	AF, BC, DE, HL, IX
+			EXX
+			EX 	AF,AF'
+			PUSH	AF, BC, DE, HL, IY
+
+			CALL	CERBERUS_IO.Read_Keyboard
+			LD	(KEY_CODE), A
+			CP	0x1B
+			CALL	Z, PATCH.ESCSET
+
+			LD	DE, 2
+			LD	HL, (TIME + 0)
+			ADD	HL, DE
+			LD	(TIME + 0), HL
+			JR	NC, 1F
+			LD	HL, (TIME + 2)
+			INC	HL
+			LD	(TIME + 2), HL
+
+1:			POP	IY, HL, DE, BC, AF
+			EXX
+			EX	AF,AF'
+			POP	IX, HL, DE, BC, AF
+			RETI
+
+			ENDMODULE
+	
