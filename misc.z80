@@ -2,9 +2,10 @@
 ; Title:	BBC Basic for Cerberus 2080 - Miscellaneous helper functions
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	10/08/2021
 ;
 ; Modinfo:
+; 10/08/2021:	Fixed ASC_TO_NUMBER (removed Z80N instructions)
 
 ; Read a number and convert to binary
 ; If prefixed with &, will read as hex, otherwise decimal
@@ -31,8 +32,12 @@ ASC_TO_NUMBER:		PUSH	BC		; Preserve BC
 			SUB 	7		; Adjust ASCII A-F to nibble
 			CP 	16		; Check for > F
 			JR 	NC, 4F		; Return if out of range
-2:	   		LD	B, 4		; Shift DE left 4 times
-;			BSLA	DE, B		
+2:			EX 	DE, HL 		; Shift DE left 4 times
+	   		ADD	HL, HL	
+	   		ADD	HL, HL	
+	   		ADD	HL, HL	
+	   		ADD	HL, HL	
+			EX	DE, HL	
         		OR      E		; OR the new digit in to the least significant nibble
         		LD      E, A
         		INC     HL		; Onto the next character
@@ -51,7 +56,7 @@ ASC_TO_NUMBER:		PUSH	BC		; Preserve BC
 			ADD	HL, BC 		; x 5
 			ADD	HL, HL 		; x 10
 			EX	DE, HL
-;			ADD	DE, A 		; Add A to DE
+			ADD8U	DE 		; Add A to DE (macro)
 			INC	HL
 			JR	3B
 4:			POP	BC 		; Fall through to SKIPSP here
@@ -148,11 +153,7 @@ PRINT_BCD_1:		LD	C, A
 ;
 SWITCH_A:		EX	(SP), HL		; Swap HL with the contents of the top of the stack
 			ADD	A, A			; Multiply A by two
-			ADD	A, L 			; Index into the lookup table; this should immediately
-			LD	L, A			; follow the call
-			ADC	A, H
-			SUB	L
-			LD	H, A
+			ADD8U	HL 			; Add to HL (macro)
 			LD	A, (HL)			; follow the call. Fetch an address from the
 			INC	HL 			; table.
 			LD	H, (HL)
