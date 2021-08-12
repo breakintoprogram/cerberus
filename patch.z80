@@ -2,10 +2,10 @@
 ; Title:	BBC Basic for Cerberus 2080
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	12/08/2021
 ;
 ; Modinfo:
-;
+; 12/08/2021:	Added POINT, GCOL, LOAD and SAVE and STAR commands BYE, MEMDUMP, FX, ERASE, DELETE
 			
 			MODULE PATCH
 
@@ -185,22 +185,77 @@ UPPRC:  		AND     7FH
 
 ; Each command has bit 7 of the last character set, and is followed by the address of the handler
 ;
-COMDS:  		DC	'CAT':	DEFW STAR_CAT	; Catalogue SD Card
-			DC	'TEST':	DEFW STAR_TEST 
+COMDS:  		DC	'BYE': DEFW STAR_BYE	; Exit to BIOS
+			DC	'CAT': DEFW STAR_CAT	; Catalogue SD Card
+			DC	'DELETE': DEFW STAR_DELETE
+			DC	'ERASE': DEFW STAR_DELETE
+			DC	'FX': DEFW STAR_FX	; FX command
+			DC	'MEMDUMP': DEFW STAR_MEMDUMP
+			DC	'TEST': DEFW STAR_TEST 
 			DEFB	0FFH	
+
+; *BYE
+;
+STAR_BYE:		LD 	A, 0x7F
+			LD	(Outbox_Flag), A 
+			LD	L, 0
+			JP	EVAL.COUNT0
 
 ; *CAT / *.
 ;
 STAR_DOT:
 STAR_CAT:		RET 
 
+; *DELETE filename
+;
+STAR_DELETE:		CALL	SKIPSP
+			JP	CERBERUS_DOS.Delete
+			
+; *MEMDUMP addr count
+; 
+STAR_MEMDUMP		CALL	ASC_TO_NUMBER	; Get start address
+			PUSH	DE 
+			CALL	ASC_TO_NUMBER	; Get length in DE
+			POP	HL 		; Get start address in HL
+			JP	CERBERUS_DEBUG.Memory_Dump
+
 ; *TEST 
 ;
-STAR_TEST		LD	C, 40 
-			LD	B, 30
-			LD	E, 79
-			LD	D, 0
-			JP	CERBERUS_GRAPHICS.Draw_Line
+STAR_TEST		PUSH	IX 
+			LD	IX, Outbox_Flag
+			CALL	ASC_TO_NUMBER
+			LD	(IX + 1), E 
+			CALL	ASC_TO_NUMBER
+			LD	(IX + 2), E 
+			LD	(IX + 0), 1
+			POP	IX 
+			RET
+
+; *FX
+;
+STAR_FX:		CALL	ASC_TO_NUMBER	; C: FX #
+			LD	C, E
+			CALL	ASC_TO_NUMBER	; B: First parameter
+			LD	B, E
+			CALL	ASC_TO_NUMBER	; E: Second parameter
+			LD	L, B 		; L: First parameter
+			LD	H, E 		; H: Second parameter
+			LD	A, C 		; A: FX #, and fall through to OSBYTE
+;
+; OSBYTE
+;  A: FX #
+;  L: First parameter
+;  H: Second parameter
+;
+OSBYTE:			CP	0x13
+			JR	Z, OSBYTE_13
+			JP 	HUH
+
+; OSBYTE 0x13 (FX 19): Wait 1/50th of a second
+;
+OSBYTE_13:		HALT	
+			LD	L, 0
+			JP	EVAL.COUNT0
 
 ; GET(port) - Read Z80/Nextreg port
 ; GET(x, y) - Read character from screen position (x, y)
@@ -253,6 +308,15 @@ STAR_TEST		LD	C, 40
 			EX	AF, AF
 			JP	EVAL.INKEY1 
 
+; GCOL mode,colour
+;
+@GCOL:			CALL	EXPR_P2		; DE: mode, HL: colour
+			LD	A, E 
+			LD	(PLOT_MODE), A 
+			LD	A, L 
+			LD	(PLOT_COLOUR), A 
+			JP	XEQ 			
+
 ; MOVE x, y
 ;
 @MOVE:			CALL	EXPR_P2		; DE: X, HL: Y
@@ -300,6 +364,33 @@ STAR_TEST		LD	C, 40
 			CALL	MOVE_1
 1:			JP	XEQ
 
+; POINT(x, y)
+;
+@POINT:			CALL	EXPR_P2		; DE: X, HL: Y
+			LD	H, L		; H: Y
+			LD	L, E 		; L: X
+			CALL	CERBERUS_GRAPHICS.Point
+			LD	L, A
+1:			CALL	BRAKET
+			JP      EVAL.COUNT0
+
+;OSLOAD - Load an area of memory from a file.
+;   Inputs: HL addresses filename (CR terminated)
+;           DE = address at which to load
+;           BC = maximum allowed size (bytes)
+;  Outputs: Carry reset indicates no room for file.
+; Destroys: A,B,C,D,E,H,L,F
+;
+@OSLOAD:		JP	CERBERUS_DOS.Load
+
+;OSSAVE - Save an area of memory to a file.
+;   Inputs: HL addresses filename (term CR)
+;           DE = start address of data to save
+;           BC = length of data to save (bytes)
+; Destroys: A,B,C,D,E,H,L,F
+;
+@OSSAVE:		JP	CERBERUS_DOS.Save
+
 ; Get two values from EXPR in DE, HL
 ; IY: Pointer to expression string
 ; Returns:
@@ -323,8 +414,6 @@ STAR_TEST		LD	C, 40
 @OSSHUT:
 @OSOPEN:
 @OSCALL:
-@OSSAVE:
-@OSLOAD:
 @GETPTR:
 @PUTPTR:
 @GETEXT:
