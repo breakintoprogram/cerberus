@@ -3,9 +3,10 @@
 ;		Cerberus 2080 I/O Routines
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	11/08/2021
 ;
 ; Modinfo:
+; 11/08/2021:	Changed label of Mailbox to Inbox
 
 			MODULE	CERBERUS_IO
 
@@ -13,12 +14,12 @@
 ; Returns:
 ;  A: 0x00 (NUL) if no key pressed
 ;
-Read_Keyboard:		LD	A, (Mail_Flag)
+Read_Keyboard:		LD	A, (Inbox_Flag)
 			OR	A 
 			RET	Z
 			XOR	A 
-			LD	(Mail_Flag), A
-			LD	A, (Mail_Box)
+			LD	(Inbox_Flag), A
+			LD	A, (Inbox_Data)
 			RET
 
 ; Get charpos
@@ -254,16 +255,7 @@ VDU_EXEC_UDG:		LD	HL, VDU_BUFFER
 			LD	A, (HL)			; Get character code
 			CP	32			; Is it below ASCII 32?
 			RET	C 			; Yes, so do nothing
-			PUSH	HL
-			LD	DE, Character_RAM	; Get character location in character RAM
-			LD	H, 0 
-			LD	L, A
-			ADD	HL, HL 			; Multiply character code by 8
-			ADD	HL, HL
-			ADD	HL, HL 
-			ADD	HL, DE			; Add to base address in character RAM
-			EX 	DE, HL			; DE: Destination address in character RAM
-			POP	HL 			; HL: 8 bytes of VDU data
+			CALL	CERBERUS_GRAPHICS.Get_CRAM_Address
 			INC	L			; Copy the 8 bytes of character
 			LD	BC, 8			; data into character ram
 			LDIR
