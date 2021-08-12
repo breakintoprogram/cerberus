@@ -6,11 +6,12 @@
 ; Author:	(C) Copyright  R.T.Russell 31-12-1983
 ; Modified By:	Dean Belfield
 ; Created:	02/05/2021
-; Last Updated:	09/08/2021
+; Last Updated:	12/08/2021
 ;
 ; Modinfo:
 ; 02/05/2021:	Modified by Dean Belfield to assemble with SJASMPLUS
 ; 09/08/2021:	Added all variables required by Cerberus version of BBC basic
+; 12/08/2021:	Tweaks for file handling
 
 			MODULE RAM
 
@@ -53,8 +54,8 @@ Start:			EQU 	$
 ; Extra Next-implementation specific system variables
 ;
 @VDU_BUFFER:		EQU	ACCS		; Storage for VDU commands
-@DOS_BUFFER:		EQU	ACCS		; Storage for DOS commands
 ;
+@DOS_BUFFER:		DEFS	64		; Buffer for DOS commands to CAT
 @FLAGS:			DEFS	1		; Flags: B7=ESC PRESSED, B6=ESC DISABLED
 @KEY_SCAN:		DEFS	2		; Results of last keyscan
 @KEY_COUNT:		DEFS	1		; Key repeat counter
@@ -64,6 +65,7 @@ Start:			EQU 	$
 @TIME:			DEFS	4	
 @CURSOR_X:		DEFS	1		; Edit cursor position on screen
 @CURSOR_Y:		DEFS	1
+@CURSOR_C:		DEFS	1		; Temporary store for char behind cursor
 @CHARPOS_X:		DEFS	1		; Current character position on screen
 @CHARPOS_Y:		DEFS	1
 @PLOTORG_X:		DEFS	1		; Plot origin
@@ -72,6 +74,8 @@ Start:			EQU 	$
 @PLOTPRE_Y:		DEFS	1
 @PLOTPOS_X:		DEFS	1		; Current plot position on screen
 @PLOTPOS_Y:		DEFS	1
+@PLOT_MODE:		DEFS	1		; Plot mode as set by GCOL
+@PLOT_COLOUR:		DEFS	1		; Plot colour as set by GCOL
 @VDU_STATE:		DEFS	1		; VDU state
 @VDU_PTR:		DEFS	1		; Pointer into VDU buffer
 @VDU_COUNT:		DEFS	1		; VDU count of characters left to read
