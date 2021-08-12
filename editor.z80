@@ -2,9 +2,10 @@
 ; Title:	BBC Basic for Cerberus 2080 - Editor
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	10/08/2021
 ;
 ; Modinfo:
+; 10/08/2021:	Added cursor support and fixed editor keycodes
 
 			MODULE EDITOR
 
@@ -21,17 +22,15 @@ Edit_Line:		LD	(HL), CR		; Initialise buffer
 			LD	A, 0
 			RET	M
 			LD	DE, (CHARPOS_X)		; Update the cursor position
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move	
 1:			LD 	A, (KEY_CODE)		; Wait until we've let go of ESC
 			CP	0x1B			 
 			JR	Z, 1B
 ;
-Edit_Line_Loop:		LD	A, 1			; Cursor on
-			CALL	CERBERUS_CURSOR.Display
+Edit_Line_Loop:		CALL	CERBERUS_CURSOR.Show
 			CALL	OSRDCH			; Wait for character input
 			LD	C, A 			; Take a copy of the character
-			XOR	A
-			CALL	CERBERUS_CURSOR.Display	; Cursor off
+			CALL	CERBERUS_CURSOR.Hide	; Cursor off
 			CALL	LTRAP			; Check for escape
 ;
 			LD	A, (FLAGS)		; Get the flags in B
@@ -39,17 +38,17 @@ Edit_Line_Loop:		LD	A, 1			; Cursor on
 			LD	DE, (CURSOR_X)		; Cursor position
 ;
 			LD	A, C			; Check keyboard edit commands
-			CP	0x7F			; 0x7F: DEL Delete
+			CP	0x7F			; DEL Delete
 			JP	Z, Key_DEL
-			SUB	0x08			; 0x08: BS Back one character
+			CP	0x08			; BS Back one character
 			JR	Z, Key_BS
-			DEC	A			; 0x09: HT Advance one character
+			CP 	0x15			; HT Advance one character
 			JP	Z, Key_HT
-			DEC	A			; 0x0A: LF Down one character
+			CP	0x0A			; LF Down one character
 			JP	Z, Key_LF
-			DEC	A			; 0x0B; VT Up one character
+			CP	0x0B			; VT Up one character
 			JP	Z, Key_VT
-			SUB	0x02			; 0x0D: CR Enter
+			CP	0x0D			; CR Enter
 			JR	Z, Key_CR
 ;
 			LD	A, C			; Is it a printable character? 
@@ -69,7 +68,7 @@ Edit_Line_Loop:		LD	A, 1			; Cursor on
 			CALL	NZ, Update_2
 			INC	L			; Move the cursor
 			LD	DE, (CHARPOS_X)		; Update the cursor position
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 			JR	Edit_Line_Loop
 
 ; Enter pressed
@@ -91,17 +90,18 @@ Key_CR:			LD	A, (HL)			; Move the cursor to the end of the line
 ;
 Key_BS:			BIT	4, B			; Are we in COPY mode?
 			JR	Z, 1F		
-			CALL 	Move_Cursor_Left	
-			LD	(CURSOR_X), DE
+			CALL 	Move_Cursor_Left
+			CALL	CERBERUS_CURSOR.Move
 			JP	Edit_Line_Loop
 1:			INC	L 			
 			DEC	L 			; Check for cursor at beginning of line
 			JP	Z, Edit_Line_Loop	; If we are, then do nothing
 			DEC	L			; Move the cursor back
-Key_Out:		LD	A, C
-			CALL	OSWRCH			; Echo character back to terminal
+			LD 	A, 8
+;			
+Key_Out:		CALL	OSWRCH			; Echo character back to terminal
 			LD	DE, (CHARPOS_X)		; Update the cursor position
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 			JP	Edit_Line_Loop		; Loop
 
 ; Cursor Right
@@ -109,12 +109,13 @@ Key_Out:		LD	A, C
 Key_HT:			BIT	4, B			; Are we in COPY mode?
 			JR	Z, 2F		
 Key_HT_1:		CALL	Move_Cursor_Right
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 			JP	Edit_Line_Loop
 2:			LD	A, (HL)			
 			CP	CR			; Are we at the end of line? (marked with a CR)
 			JP	Z, Edit_Line_Loop	; Yes, so do nothing
 			INC	L			; Advance the cursor
+			LD	A, 9
 			JR	Key_Out			; Echo character back to terminal			
 
 ; Cursor Down 
@@ -122,7 +123,7 @@ Key_HT_1:		CALL	Move_Cursor_Right
 Key_LF:			BIT	4, B			; Are we in COPY mode?
 			JR	Z, 1F		
 			CALL	Move_Cursor_Down	
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 			JP	Edit_Line_Loop
 1:			LD	E, 0			
 			CALL	Get_Length 		; Get length of line in B from start of buffer (E=0)
@@ -132,6 +133,7 @@ Key_LF:			BIT	4, B			; Are we in COPY mode?
 			JR 	C, 2F			
 			JP	NZ, Edit_Line_Loop
 2:			LD 	L, A 
+			LD 	A, 10
 			JR	Key_Out			; Echo character back to terminal
 
 ; Cursor Up
@@ -139,12 +141,13 @@ Key_LF:			BIT	4, B			; Are we in COPY mode?
 Key_VT:			BIT	4, B			; Are we in COPY mode?
 			JR	Z, 1F			
 			CALL	Move_Cursor_Up		; Yes, so just move the cursor
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 			JP	Edit_Line_Loop
 1:			LD	A, -CHAR_COLS
 			ADD	A, L 			; Up one line
 			JP	NC, Edit_Line_Loop	; If it takes us past the beginning of the line then do nothing
 			LD	L, A 			; Store
+			LD	A, 11
 			JR	Key_Out			; Echo character back to terminal
 
 ; Delete
@@ -162,7 +165,7 @@ Key_DEL:		BIT	4, B			; Are we in COPY mode?
 			INC	B
 			CALL	Update_2
 			LD	DE, (CHARPOS_X)		; Update the cursor position
-			LD	(CURSOR_X), DE
+			CALL	CERBERUS_CURSOR.Move
 1:			JP	Edit_Line_Loop
 ;
 2:			PUSH	DE
