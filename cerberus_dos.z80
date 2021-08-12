@@ -1,0 +1,131 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 File IO routines
+; Author:	Dean Belfield
+; Created:	12/08/2021
+; Last Updated:	12/08/2021
+;
+; Modinfo:
+
+			MODULE	CERBERUS_DOS
+
+; Load an area of memory from a file
+; HL: addresses filename (CR terminated)
+; DE: address at which to load
+; BC: maximum allowed size (bytes)
+; Returns:
+;  F: Carry reset indicates no room for file
+; Destroys: A,B,C,D,E,H,L,F
+;
+Load:			LD	A, 2
+			CALL	CAT_FILECMD_3P
+			SCF
+			RET
+
+; Save an area of memory to a file
+; HL: addresses filename (term CR)
+; DE: start address of data to save
+; BC = length of data to save (bytes)
+; Destroys: A,B,C,D,E,H,L,F
+;
+Save:			LD	A, 3
+			JR	CAT_FILECMD_3P
+
+; Delete a file
+; HL: addresses filename (term CR)
+;
+Delete:			LD 	A, 4
+			JP	CAT_FILECMD_1P
+
+
+; Pass a file command to the CAT
+; HL: Address of the filename
+;  A: Command #
+;
+CAT_FILECMD_1P:		PUSH	IX 
+			LD	IX, DOS_BUFFER
+			LD	(Outbox_Data), IX 
+			JR	CAT_FILECMD
+
+; Pass a file command to the CAT
+; HL: Address of the filename
+; DE: Start address of data
+; BC: Length / maximum allowed size
+;  A: Command #
+;
+CAT_FILECMD_3P:		PUSH	IX 
+			LD	IX, DOS_BUFFER 
+			LD	(Outbox_Data), IX 
+			LD	(IX + 0), E 
+			LD	(IX + 1), D 
+			LD	(IX + 2), C 
+			LD	(IX + 3), B 
+			LD	BC, 4
+			ADD	IX, BC
+;			
+CAT_FILECMD:		LD	B, 60 
+			LD	C, A 			; Store the command #
+1:			LD	A, (HL)
+			CP	CR 
+			JR	Z, 2F
+			LD	(IX + 0), A 
+			INC	IX 
+			INC	L
+			DJNZ	1B
+			POP	IX 
+			LD	A, 127			; Filename too large
+			JR	Error 			
+;
+2:			LD	(IX + 0), 0		; Terminate the filename with \0
+			POP	IX 
+			LD	A, C 
+			LD	(Outbox_Flag), A 
+;
+; Wait for the flag status to change, i.e the CAT has finished the load operation
+;			
+3:			HALT
+			LD	A, (Outbox_Flag)	; Check the outbound flag
+			CP	C			; Has the CAT changed it from 2?
+			JR	Z, 3B			; No, so keep on waiting
+			OR	A			; Check for 0 = OK
+			JR	NZ, 4F 			; Error at this point
+			RET				; OK!
+;
+; Handle the error
+;
+4:			PUSH	AF
+			XOR	A 
+			LD	(Outbox_Flag), A 	; Clear the outbox flag to ack error
+			POP	AF 
+			JR 	Error			
+
+; Lookup error codes
+; A: Error code from CAT
+;
+Error:			AND 	0x7F			; Clear the top bit
+			LD	E, A			; Store the error
+			LD	HL, Error_Codes		; Find the error
+0:			LD	A, E			
+1:			CP	(HL)
+			JR	Z, 3F			; Found it!
+			BIT	7, (HL)			; Is it the last entry?
+			JR	NZ, 3F
+2:			INC	HL
+			LD	A, (HL)
+			OR	A 
+			JR	NZ, 2B
+			INC	HL 
+			JR	0B
+3:			INC	HL
+			PUSH	HL 
+			XOR	A 
+			JP	EXTERR			; Let BASIC handle the error
+; Errors
+;
+Error_Codes:		DEFB	4, "No such file or directory", 0
+			DEFB	5, "Unable to open file", 0
+			DEFB	8, "Already exists", 0
+			DEFB	127, "Filename too long", 0
+			DEFB	255, "Error", 0
+
+			ENDMODULE
