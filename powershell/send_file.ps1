@@ -3,7 +3,7 @@
 switch($use) {
     1 {
         $filePath = "H:\My Code\Cerberus\Z80\BBC Basic\build.bin"
-        $startAddress = 0x0202
+        $startAddress = 0x0205
     }
 }
 
