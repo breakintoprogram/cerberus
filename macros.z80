@@ -1,0 +1,16 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Useful macros
+; Author:	Dean Belfield
+; Created:	10/08/2021
+; Last Updated:	10/08/2021
+;
+; Modinfo:
+
+		MACRO 	ADD8U reg
+		ADD	A, low reg 
+		LD	low reg, A 
+		ADC	A, high reg
+		SUB	low reg
+		LD	high reg, A 
+		ENDM
