@@ -3,20 +3,84 @@
 ;		Cerberus 2080 Cursor Routines
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	10/08/2021
 ;
 ; Modinfo:
+; 10/08/2021:	Added Show, Move and Hide methods
 
 			MODULE	CERBERUS_CURSOR
 
 ; Initialise the cursor
 ;
-Initialise:		RET
-
-; Set cursor visibility
-; 0: Off
-; 1: On
+Initialise:		LD	A, 32			; Space
 ;
-Display:		RET
+Set_Cursor:		PUSH	BC 
+			PUSH	DE 
+			PUSH	HL
+			CALL	CERBERUS_GRAPHICS.Get_CRAM_Address
+			LD	HL, Character_RAM
+			LD	B, 8
+1:			LD	A, (DE)
+			CPL 
+			LD	(HL), A 
+			INC	E 
+			INC 	L 
+			DJNZ	1B
+			POP	HL
+			POP	DE
+			POP	BC
+			RET
+
+; Move the cursor
+; DE: New position
+;
+Move:			LD	(CURSOR_X), DE		; Falls through to Show
+			RET
+
+; Flash the cursor on interrupt
+;
+Flash:			LD	A, (CURSOR_C)		; Check whether the cursor is visible
+			OR	A 
+			RET	Z 
+			LD	C, A 
+			LD	HL, (CURSOR_X)
+			CALL	CERBERUS_GRAPHICS.Get_VRAM_Address
+			LD	A, (TIME)
+			AND	%00100000
+			JR	Z, 1F
+			LD	(HL), C 
+			RET 
+1:			LD	(HL), A 
+			RET 
+
+
+; Display the cursor at current position
+;
+Show:			LD	A, (CURSOR_C)		; If the cursor character is not 0, then already visible
+			OR	A 
+			RET	NZ 
+			PUSH	HL
+			LD	HL, (CURSOR_X)
+			CALL	CERBERUS_GRAPHICS.Get_VRAM_Address
+			LD	A, (HL)
+			LD	(CURSOR_C), A
+			CALL	Set_Cursor
+			LD	(HL), 0
+			POP	HL
+			RET
+
+; Hide the cursor
+;
+Hide:			LD	A, (CURSOR_C)		; If the cursor character is 0, then already hidden
+			OR	A 
+			RET	Z 
+			PUSH	HL
+			LD	HL, (CURSOR_X)
+			CALL	CERBERUS_GRAPHICS.Get_VRAM_Address
+			LD	(HL), A 
+			XOR	A 
+			LD	(CURSOR_C), A
+			POP	HL
+			RET
 
 			ENDMODULE
