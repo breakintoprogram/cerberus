@@ -3,10 +3,10 @@
 ;		Cerberus 2080 Graphics Routines
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	10/08/2021
 ;
 ; Modinfo:
-
+; 10/08/2021:	Tidied up the Plot routines, added POINT, support for GCOL, renamed some functions to remove ambiguity
 
 			MODULE	CERBERUS_GRAPHICS 
 
@@ -52,7 +52,7 @@ Scroll_Up:		LD	HL, Video_RAM + CHAR_COLS
 ;  F: C if character match, otherwise NC
 ;
 Get_Char:		PUSH	HL
-			CALL	Get_Char_Address
+			CALL	Get_VRAM_Address
 			LD	A, (HL)
 			POP	HL
 			SCF
@@ -64,12 +64,18 @@ Get_Char:		PUSH	HL
 ;  H: Y Coordinate
 ;
 Print_Char:		PUSH	HL
-			CALL	Get_Char_Address
+			CALL	Get_VRAM_Address
 			LD	(HL), A 
 			POP	HL
 			RET
+
+; Get address of character in video RAM
+;  L: X Coordinate
+;  H: Y Coordinate
+; Returns
+; HL: Address of character
 ;
-Get_Char_Address:	PUSH	AF
+Get_VRAM_Address:	PUSH	AF
 			PUSH	DE
 			LD	E, L		; DE: X coordinate, screen address
 			LD	D, high Video_RAM
@@ -85,6 +91,47 @@ Get_Char_Address:	PUSH	AF
 			ADD	HL, DE 
 			POP	DE
 			POP	AF
+			RET
+
+; Get address of character in character RAM
+;  A: Character (0-255)
+; Returns
+; DE: Address of character data in character RAM
+;
+Get_CRAM_Address:	PUSH	HL
+			LD	DE, Character_RAM	; Get character location in character RAM
+			LD	H, 0 
+			LD	L, A
+			ADD	HL, HL 			; Multiply character code by 8
+			ADD	HL, HL
+			ADD	HL, HL 
+			ADD	HL, DE			; Add to base address in character RAM
+			EX 	DE, HL			; DE: Destination address in character RAM
+			POP	HL 
+			RET 
+
+; Get pixel address data
+;  L: X
+;  H: Y
+; Returns
+; HL: Address of character data in VRAM
+;  A: Pixel mask data of pixels on-screen
+;  E: Pixel mask data of this pixel
+;
+Get_Pixel_Data:		LD	A, 1 
+			SRL 	L
+			JR	NC, 1F 
+			RLCA
+1:			SRL 	H 
+			JR	NC, 2F 
+			RLCA
+			RLCA 
+2:			LD	E, A 			;  E: The pixel byte data of this pixel
+			CALL	Get_VRAM_Address	; HL: The char address in VRAM
+			LD	A, (HL)
+			PUSH	HL 
+			CALL	Char_To_Pixel
+			POP	HL 
 			RET
 
 ; Boundary check
@@ -103,12 +150,22 @@ Transform_Coords:	RET
 
 ; POINT(x,y)
 ; Read a point off the screen
-; DE: X
-; HL: Y
+;  L: X
+;  H: Y
 ; Returns:
-;  A: Point value
+;  A: Point value (1 = set, 0 = unset)
 ;
-Point:			RET
+Point:			PUSH	BC 
+			PUSH	DE 
+			PUSH	HL 
+			CALL	Get_Pixel_Data
+			AND	E
+			JR	Z, 1F
+			LD	A, 1
+1:			POP	HL 
+			POP	DE 
+			POP	BC
+			RET
 		
 ; PLOT n,x,y
 ; Graphics Operations
@@ -116,7 +173,15 @@ Point:			RET
 ;  H: Y
 ;  A: Type
 ;
-Plot:			JP 	Plot_Point 
+Plot:			AND	%11111000		; Ignore bottom 3 bits of type
+			CP	64			; If less than 8, it's a line
+			JP	C, Plot_Line 
+			JR	Z, Plot_Point		; If it is 8, then plot a point
+;			CP	80	
+;			JR	Z, Plot_Triangle
+;			CP	144
+;			JP	Z, Plot_Circle		; Check for circle
+			RET	
 
 ; Plot_Line
 ;  L: X
@@ -137,32 +202,44 @@ Plot_Line:		LD	BC, (PLOTPOS_X)		; BC: (X1, Y1)
 Plot_Point:		PUSH	BC 
 			PUSH	DE 
 			PUSH	HL 
-			LD	A, 1
-			SRL 	L
-			JR	NC, 1F 
-			RLCA
-1:			SRL 	H 
-			JR	NC, 2F 
-			RLCA
-			RLCA 
-2:			LD	E, A 			; Store the pixel byte data in E
-			CALL 	Get_Char_Address	; Get the screen character address in HL
-			LD	A, (HL)			; Get the character byte value off screen
-			PUSH	HL
-			CALL	Char_To_Pixel		; Convert to a pixel bitmask
-			POP	HL
-			OR	E 			; A: Combined pixel and screen values
+			CALL	Plot_Point_1		; Do the plot
+			CP	16			; Is it between 0-15?
+			JR	NC, 1F 			; No, so skip the next bit
 			LD	DE, PIXEL_TABLE		; Now convert back to a character value
-			ADD	A, E 
-			LD	E, A 
-			ADC  	A, D 
-			SUB 	E 
-			LD 	D, A 
-			LD	A, (DE)			; Get the new pixel value from the table
-			LD	(HL), A			; And store on screen
-			POP	HL 
-			POP	DE 
-			POP	BC
+			ADD8U	DE 			; Add A to DE (macro)
+			LD	A, (DE)			; Fetch the new character value
+			LD	(HL),  A 		; And write to screen
+1:			POP	HL 
+			POP	DE
+			POP	BC 
+			RET
+;
+Plot_Point_1:		CALL	Get_Pixel_Data		; Get the pixel data
+			LD	D, A 			; D: Screen data
+			LD	A, (PLOT_MODE)
+			CALL 	SWITCH_A
+			DEFW	Plot_OR
+			DEFW	Plot_OR
+			DEFW	Plot_AND
+			DEFW	Plot_XOR 
+			DEFW	Plot_XOR
+			DEFW	Plot_NOP
+			DEFW 	Plot_AND 
+;
+Plot_NOP:		LD	A, 255			; A duff character, so ignored
+			RET 
+;
+Plot_OR:		LD	A, E  			; Pixel data
+			OR	D 			; Screen data
+			RET
+;
+Plot_XOR:		LD	A, E 			; Pixel data
+			XOR	D 			; Screen data
+			RET 
+;
+Plot_AND:		LD	A, E 			; Pixel data
+			XOR	0x0F 			; Invert
+			AND	D 
 			RET
 
 ; Lookup a pixel value from the pixel table
