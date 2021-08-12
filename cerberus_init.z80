@@ -3,9 +3,10 @@
 ;		Cerberus 2080 Initialisation
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	10/08/2021
 ;
 ; Modinfo:
+; 10/08/2021:	Initialise and flash the cursor
 
 			MODULE	CERBERUS_INIT
 
@@ -13,6 +14,7 @@ System:			DI					; Disable the maskable interrupts
 			LD 	SP,Stack_Top			; Stick the stack somewhere safe for now
 
 			CALL	Initialise_RAM
+			CALL	CERBERUS_CURSOR.Initialise
 
 			LD	A, 0xC3				; JP opcode for NMI
 			LD	HL, Interrupt			; Interrupt handler
@@ -49,6 +51,7 @@ Interrupt:		PUSH	AF, BC, DE, HL, IX
 			LD	(KEY_CODE), A
 			CP	0x1B
 			CALL	Z, PATCH.ESCSET
+			CALL	CERBERUS_CURSOR.Flash 
 
 			LD	DE, 2
 			LD	HL, (TIME + 0)
