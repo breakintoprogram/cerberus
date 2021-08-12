@@ -2,18 +2,21 @@
 ; Title:	BBC Basic for Cerberus 2080 - Main build file
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	31/07/2021
+; Last Updated:	12/08/2021
 ;
 ; Modinfo:
-;
+; 10/08/2021:	Added macros.z80, changed mailbox labels
+; 12/08/2021:	Added cerberus_debug.z80 and cerberus_dos.z80
 
-			DEFINE BUILD_VERSION "0.01"	; Build version
+			DEFINE BUILD_VERSION "0.02"	; Build version
 ;
 ; Memory map
 ;
-Mail_Flag:		EQU 	0x0200
-Mail_Box:		EQU 	0x0201
-Code_Start:		EQU	0x0202			; Code start
+Inbox_Flag:		EQU 	0x0200			; Data received from the ATMega328p
+Inbox_Data:		EQU 	0x0201
+Outbox_Flag:		EQU	0x0202			; Data sent to the ATMega328p
+Outbox_Data:		EQU	0x0203
+Code_Start:		EQU	0x0205			; Code start
 RAM_Top:		EQU	0xEF00			; Top of usable RAM; must be on a page boundary
 Stack_Top:		EQU	0xF000			; Stack at top
 Character_RAM:		EQU	0xF000
@@ -22,7 +25,9 @@ Video_RAM:		EQU	0xF800
 CHAR_COLS:		EQU	40			; Screen width in chars
 CHAR_ROWS:		EQU	30			; Screen height in chars
 
-			ORG 	Code_Start			
+			ORG 	Code_Start	
+
+			include "macros.z80"		; Useful macros
 ;
 ; Cerberus 2080 specific code
 ; 
@@ -30,6 +35,8 @@ CHAR_ROWS:		EQU	30			; Screen height in chars
 			include "cerberus_io.z80"	; I/O
 			include "cerberus_graphics.z80"	; Graphics
 			include "cerberus_cursor.z80"	; Cursor
+			include "cerberus_debug.z80"	; Debug
+			include "cerberus_dos.z80"	; File I/O routines
 ;
 ; Other generic Z80N helper functions
 ;
@@ -48,4 +55,4 @@ CHAR_ROWS:		EQU	30			; Screen height in chars
 
 			ALIGN 	256			; USER needs to be alignd to a page boundary
 
-@USER:  		incbin "tests/cube.bbc"		; BASIC program to load into memory
+@USER:;  		incbin "tests/cube.bbc"		; BASIC program to load into memory
