@@ -16,6 +16,15 @@
 /** instead of dynamic memory, is used as often as possible to save dynamic     **/
 /** memory, the latter being the bottleneck of this code.                       **/
 
+/** Updated By:		Dean Belfield	**/
+/** Created:		31/07/2021		**/
+/** Last Updated:	12/08/2021 		**/
+
+//	Modinfo:
+//	10/08/2021:	All recognised keystrokes sent to mailbox, F12 now returns to BIOS, 50hz NMI starts when code runs
+//	11/08/2021:	Memory map now defined in configs, moved code start to 0x0205 to accomodate inbox
+//	12/08/2021:	Refactored load, save and delFile. Now handles incoming messages from Z80/6502
+
 #include <SPI.h>
 #include <SD.h>
 /** The two libraries above are built into the arduino IDE  **/
@@ -30,10 +39,17 @@
 
 #include <TimerOne.h>
 
-#define	config_dev_mode 0				// Turn off various BIOS outputs to speed up development, specifically uploading code
+/** Compilation defaults **/
+#define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
+#define config_silent 0				// Turn off the startup jingle
 #define config_enable_nmi 1			// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
 #define config_default_cpu 1		// 0: 6502, 1: Z80
-#define config_default_speed 1	// 0: 4mhz, 1: 8mhz
+#define config_default_speed 1		// 0: 4mhz, 1: 8mhz
+#define config_outbox_flag 0x0200	// Outbox flag memory location (byte)
+#define config_outbox_data 0x0201	// Outbox data memory location (byte)
+#define config_inbox_flag 0x0202	// Inbox flag memory location (byte)
+#define config_inbox_data 0x0203	// Inbox data memory location (word)
+#define config_code_start 0x0205	// Start location of code
 
 /** Pinout below defined as per Arduino Uno pin IDs **/
 /** The next pins go to SPACER **/
@@ -82,12 +98,14 @@ volatile char editLine[38];
 volatile char previousEditLine[38];
 
 /** The above is self-explanatory: it allows for repeating previous command **/
-volatile byte pos = 1;             					/** Position in edit line currently occupied by cursor **/
-volatile bool mode = config_default_cpu;		/** false = 6502 mode, true = Z80 mode**/
-volatile bool cpurunning = false;   				/** true = CPU is running, CAT should not use the buses **/
-volatile bool fast = config_default_speed;  /** true = 8 MHz CPU clock, false = 4 MHz CPU clock **/
+volatile byte pos = 1;						/** Position in edit line currently occupied by cursor **/
+volatile bool mode = config_default_cpu;	/** false = 6502 mode, true = Z80 mode**/
+volatile bool cpurunning = false;			/** true = CPU is running, CAT should not use the buses **/
+volatile bool intbusfree = true;			/** true = Main loop allows the interrupt to read the bus **/
+volatile bool resetCAT = false;				/** true = Reset the CAT **/
+volatile bool fast = config_default_speed;	/** true = 8 MHz CPU clock, false = 4 MHz CPU clock **/
 
-void(* resetFunc) (void) = 0;       /** Software reset fuction at address 0 **/
+void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **/
 
 PS2Keyboard keyboard;
 
@@ -185,7 +203,9 @@ void setup() {
   /**********************************************************/
   cprintStatus(STATUS_BOOT);
   /** Play a little jingle while keyboard finishes initializing **/
+  #if config_silent == 0
   playJingle();
+  #endif
   delay(1000);
   cprintStatus(STATUS_DEFAULT);
   cprintEditLine();
@@ -205,63 +225,63 @@ char readKey() {
 }
 
 void loop() {
-  char ascii = readKey(); /** Stores ascii value of key pressed **/
-  byte i;     /** Just a counter **/
-  /** Wait for a key to be pressed, then take it from there... **/
+	char ascii = readKey();	/** Stores ascii value of key pressed **/
+	byte i;     			/** Just a counter **/
 
+  	/** Wait for a key to be pressed, then take it from there... **/
 	if(ascii > 0) {
-    if(cpurunning) {
-    	if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
-    		stopCode();
+		intbusfree = false;
+    	if(cpurunning) {
+    		if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
+	    		stopCode();
+    		}
+    		else {
+        		digitalWrite(CPUGO, LOW);   			/** Pause the CPU and tristate its buses to high-Z **/
+      			byte mode = cpeek(config_outbox_flag);
+      			cpoke(config_outbox_data, ascii);       /** Put token code of pressed key in the CPU's mailbox, at config_outbox_data **/
+	         	cpoke(config_outbox_flag, 0x01);		/** Flag that there is new mail for the CPU waiting at the mailbox **/
+      			digitalWrite(CPUGO, HIGH);  			/** Let the CPU go **/
+      			#if config_enable_nmi == 0
+      			digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
+      			digitalWrite(CPUIRQ, LOW);
+      			#endif
+    		}
     	}
     	else {
-        digitalWrite(CPUGO, LOW);   /** Pause the CPU and tristate its buses to high-Z **/
-      	byte mode = cpeek(0x0200);
-      	cpoke(0x0201, ascii);       /** Put token code of pressed key in the CPU's mailbox, at 0x0201 **/
-      	if( mode != 0xFE ) {
-         	cpoke(0x0200, 0x01);        /** Flag that there is new mail for the CPU waiting at the mailbox **/
-      	}
-      	digitalWrite(CPUGO, HIGH);  /** Let the CPU go **/
-      	#if config_enable_nmi == 0
-      	digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
-      	digitalWrite(CPUIRQ, LOW);
-      	#endif
-    	}
-    }
-    else {
-	    switch(ascii) {
-	    	case PS2_ENTER:
-	    		enter();
-	    		break;
-	    	case PS2_UPARROW:
-	        for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
-        	i = 0;
-        	while (editLine[i] != 0) i++;
-        	pos = i;
-        	cprintEditLine();
-        	break;
-        case PS2_DOWNARROW:
-        	clearEditLine();
-        	break;
-        case PS2_DELETE:
-        case PS2_LEFTARROW:
-	        editLine[pos] = 32; /** Put an empty space in current cursor position **/
-        	if (pos > 1) pos--; /** Update cursor position, unless reached left-most position already **/
-        	editLine[pos] = 0;  /** Put cursor on updated position **/
-        	cprintEditLine();   /** Print the updated edit line **/
-        	break;
-        default:
-	        editLine[pos] = ascii;  /** Put new character in current cursor position **/
-        	if (pos < 37) pos++;    /** Update cursor position **/
-        	editLine[pos] = 0;      /** Place cursor to the right of new character **/
-    			#if config_dev_mode == 0        	
-	       	cprintEditLine();       /** Print the updated edit line **/
-	       	#endif
-        	break;        
-	    }
-    }    
-    /*********************************************************************************************/
-  }
+	 	   switch(ascii) {
+	    		case PS2_ENTER:
+		    		enter();
+	    			break;
+	    		case PS2_UPARROW:
+		     	   	for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
+	        		i = 0;
+        			while (editLine[i] != 0) i++;
+        			pos = i;
+        			cprintEditLine();
+        			break;
+        		case PS2_DOWNARROW:
+		        	clearEditLine();
+        			break;
+        		case PS2_DELETE:
+        		case PS2_LEFTARROW:
+			        editLine[pos] = 32; /** Put an empty space in current cursor position **/
+        			if (pos > 1) pos--; /** Update cursor position, unless reached left-most position already **/
+        			editLine[pos] = 0;  /** Put cursor on updated position **/
+        			cprintEditLine();   /** Print the updated edit line **/
+        			break;
+        		default:
+		        	editLine[pos] = ascii;  /** Put new character in current cursor position **/
+        			if (pos < 37) pos++;    /** Update cursor position **/
+        			editLine[pos] = 0;      /** Place cursor to the right of new character **/
+    				#if config_dev_mode == 0        	
+		       		cprintEditLine();       /** Print the updated edit line **/
+	       			#endif
+        			break;        
+			}
+		}    
+		intbusfree = true;
+	}
+	if(resetCAT) resetFunc();			/** Reset the CAT **/
 }
 
 /************************************************************************************************/
@@ -339,7 +359,7 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     cprintStatus(STATUS_READY);
   /** RESET *********************************************************************************/
   } else if (nextWord == F("reset")) {
-    resetFunc();                          /** This resets CAT and, therefore, the CPUs too **/
+    resetCAT = true;                      /** This resets CAT and, therefore, the CPUs too **/
   /** FAST **********************************************************************************/
   } else if (nextWord == F("fast")) {     /** Sets CPU clock at 8 MHz **/
     digitalWrite(CPUSPD, HIGH);
@@ -356,22 +376,22 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   /** DEL ***********************************************************************************/
   } else if (nextWord == F("del")) {      /** Deletes a file on uSD card **/
     nextWord = getNextWord(false);
-    delFile(nextWord);
+    catDelFile(nextWord);
   /** LOAD **********************************************************************************/
   } else if (nextWord == F("load")) {     /** Loads a binary file into memory, at specified location **/
     nextWord = getNextWord(false);        /** Get the file name from the edit line **/
     nextNextWord = getNextWord(false);    /** Get memory address **/
-    load(nextWord, nextNextWord, false);
+    catLoad(nextWord, nextNextWord, false);
   /** RUN ***********************************************************************************/
   } else if (nextWord == F("run")) {      /** Runs the code in memory **/
     for (i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
     runCode();
   /** SAVE **********************************************************************************/
   } else if (nextWord == F("save")) {
-    nextWord = getNextWord(false);                    /** Get start address **/
-    nextNextWord = getNextWord(false);
-    nextNextNextWord = getNextWord(false);
-    save(nextWord, nextNextWord, nextNextNextWord);
+    nextWord = getNextWord(false);						/** Start start address **/
+    nextNextWord = getNextWord(false);					/** End address **/
+    nextNextNextWord = getNextWord(false);				/** Filename **/
+    catSave(nextNextNextWord, nextWord, nextNextWord);
   /** MOVE **********************************************************************************/
   } else if (nextWord == F("move")) {
     nextWord = getNextWord(false);
@@ -475,12 +495,16 @@ void list(String address) {
 }
 
 void runCode() {
+  byte runL = config_code_start & 0xFF;
+  byte runH = config_code_start >> 8;
+
   ccls();
   /** REMEMBER:                           **/
-  /** Byte at 0x0200 is the new mail flag **/
-  /** Byte at 0x0201 is the mail box      **/
-  cpoke(0x0200, 0x00);    /** Reset mail flag **/
-  cpoke(0x0201, 0x00);    /** Reset mailbox **/
+  /** Byte at config_outbox_flag is the new mail flag **/
+  /** Byte at config_outbox_data is the mail box      **/
+  cpoke(config_outbox_flag, 0x00);	/** Reset outbox mail flag	**/
+  cpoke(config_outbox_data, 0x00);	/** Reset outbox mail data	**/
+  cpoke(config_inbox_flag, 0x00);	/** Reset inbox mail flag	**/
   if (!mode) {            /** We are in 6502 mode **/
     /** Non-maskable interrupt vector points to 0xFCB0, just after video area **/
     cpoke(0xFFFA, 0xB0);
@@ -488,9 +512,9 @@ void runCode() {
     /** The interrupt service routine simply returns **/
     // FCB0        RTI             40
     cpoke(0xFCB0, 0x40);
-    /** Set reset vector to 0x0202, the beginning of the code area **/
-    cpoke(0xFFFC, 0x02);
-    cpoke(0xFFFD, 0x02);
+    /** Set reset vector to config_code_start, the beginning of the code area **/
+    cpoke(0xFFFC, runL);
+    cpoke(0xFFFD, runH);
   } else {                /** We are in Z80 mode **/
     /** The NMI service routine of the Z80 is at 0x0066 **/
     /** It simply returns **/
@@ -498,10 +522,10 @@ void runCode() {
     cpoke(0x0066, 0xED);
     cpoke(0x0067, 0x45);
     /** The Z80 fetches the first instruction from 0x0000, so put a jump to the code area there **/
-    // 0000   C3 00 01               JP   $0202
+    // 0000   C3 ll hh               JP   config_code_start
     cpoke(0x0000, 0xC3);
-    cpoke(0x0001, 0x02);
-    cpoke(0x0002, 0x02);
+    cpoke(0x0001, runL);
+    cpoke(0x0002, runH);
   }
   cpurunning = true;
   digitalWrite(CPURST, HIGH); /** Reset the CPU **/
@@ -522,7 +546,7 @@ void stopCode() {
     delay(50);                   /** Give it some time **/
     digitalWrite(CPURST, LOW);  /** Finish reset cycle **/
 
-    load("chardefs.bin","0xf000", true);  /** Silently reset the character definitions in case the CPU changed them **/
+    load("chardefs.bin", 0xf000);/** Reset the character definitions in case the CPU changed them **/
     ccls();                     /** Clear screen completely **/
     cprintFrames();             /** Reprint the wire frame in case the CPU code messed with it **/
     cprintStatus(STATUS_DEFAULT);            /** Update status bar **/
@@ -534,9 +558,47 @@ void stopCode() {
  * CPU interrupt routine
  */
 void cpuInterrupt(void) {
-  if( cpurunning ) {
-    digitalWrite(CPUIRQ, HIGH); /** Trigger a NMI interrupt **/
-    digitalWrite(CPUIRQ, LOW);
+  int	flag, status;
+  byte	retVal = 0x00;							// Return status; default is OK
+  unsigned int address;							// Pointer for data
+
+  if( cpurunning) {								// Only run this code if cpu is running 
+	if( intbusfree ) {							// We can only do this bit if the main loop is not doing stuff on the bus
+    	digitalWrite(CPUGO, LOW); 				// Pause the CPU and tristate its buses to high-Z
+		flag = cpeek(config_inbox_flag);		// Fetch the inbox flag 
+		if(flag != 0) {
+			address = cpeekW(config_inbox_data);
+			switch(flag) {
+				case 0x01:
+					break;
+				case 0x02: 
+					status = cmdLoad(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x03:
+					status = cmdSave(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x04:
+					status = cmdDelFile(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x7F:
+					resetCAT = true;
+					break;
+			}
+			cpoke(config_inbox_flag, retVal);	// Flag we're done - values >= 0x80 are error codes
+		}
+    	digitalWrite(CPUGO, HIGH);   			// Restart the CPU 
+	}
+   	digitalWrite(CPUIRQ, HIGH);		 			// Trigger an NMI interrupt
+   	digitalWrite(CPUIRQ, LOW);
   }
 }
 
@@ -577,76 +639,144 @@ void dir() {
   }
 }
 
-void delFile(String filename) {
-  /** Deletes a file from the uSD card **/
-  if (!SD.exists(filename)) cprintStatus(STATUS_NO_FILE); /** The file doesn't exist, so stop with error **/
-  else {
-    SD.remove(filename);          /** Delete the file **/
-    cprintStatus(STATUS_READY);
-  }
+void catDelFile(String filename) {
+	cprintStatus(delFile(filename));
 }
 
-void save(String startAddr, String endAddr, String filename) {
-  /** Saves contents of a region of memory to a file on uSD card **/
-  unsigned int start, finish;
-  unsigned int i;                                     /** Memory address counter **/
-  byte data;                                          /** Data from memory **/
-  File dataFile;                                      /** File to be created and written to **/
-  if (startAddr == "") cprintStatus(STATUS_MISSING_OPERAND);               /** Missing operand **/
-  else {
-    start = strtol(startAddr.c_str(), NULL, 16);      /** Convert to hexadecimal number **/
-    if (endAddr == "") cprintStatus(STATUS_MISSING_OPERAND);               /** Missing operand **/
-    else {
-      finish = strtol(endAddr.c_str(), NULL, 16);     /** Convert to hexadecimal number **/
-      if (finish < start) cprintStatus(STATUS_ADDRESS_ERROR);            /** Invalid address range **/
-      else {
-        if (filename == "") cprintStatus(STATUS_MISSING_OPERAND);          /** Missing the file's name **/
-        else {
-          if (SD.exists(filename)) cprintStatus(STATUS_FILE_EXISTS);   /** The file already exists, so stop with error **/
-          else {
-            dataFile = SD.open(filename, FILE_WRITE); /** Try to create the file **/
-            if (!dataFile) cprintStatus(STATUS_CANNOT_OPEN);           /** Cannot create the file **/
-            else {                                    /** Now we can finally write into the created file **/
-              for(i = start; i <= finish; i++) {
-                data = cpeek(i);
-                dataFile.write(data);
-              }
-              dataFile.close();
-              cprintStatus(STATUS_READY);
-            }
-          }
-        }
-      }
-    }
-  }
+int cmdDelFile(unsigned int address) {
+	cpeekStr(address, editLine, 38);
+	return delFile((char *)editLine);	
 }
 
-void load(String filename, String address, bool silent) {
+int delFile(String filename) {
+	int status = STATUS_DEFAULT;
+  	/** Deletes a file from the uSD card **/
+  	if (!SD.exists(filename)) {
+		status = STATUS_NO_FILE;		/** The file doesn't exist, so stop with error **/
+	}
+  	else {
+	    SD.remove(filename);          /** Delete the file **/
+	    status = STATUS_READY;
+  	}
+	return status;
+}
+
+void catSave(String filename, String startAddress, String endAddress) {
+	unsigned int startAddr;
+	unsigned int endAddr;
+	int status = STATUS_DEFAULT;
+   	if (startAddress == "") {
+		status = STATUS_MISSING_OPERAND;               /** Missing operand **/
+	}
+	else {
+		startAddr = strtol(startAddress.c_str(), NULL, 16);
+		if(endAddress == "") {
+			status = STATUS_MISSING_OPERAND;
+		}
+		else {
+			endAddr = strtol(endAddress.c_str(), NULL, 16);
+			status = save(filename, startAddr, endAddr);
+		}
+	}
+	cprintStatus(status);
+}
+
+int cmdSave(unsigned int address) {
+	unsigned int startAddr = cpeekW(address);
+	unsigned int length = cpeekW(address + 2);
+	cpeekStr(address + 4, editLine, 38);
+	return save((char *)editLine, startAddr, startAddr + length - 1);
+}
+
+int save(String filename, unsigned int startAddress, unsigned int endAddress) {
+  	/** Saves contents of a region of memory to a file on uSD card **/
+	int status = STATUS_DEFAULT;
+  	unsigned int i;                                     /** Memory address counter **/
+  	byte data;                                          /** Data from memory **/
+  	File dataFile;                                      /** File to be created and written to **/
+	if (endAddress < startAddress) {
+		status = STATUS_ADDRESS_ERROR;            		/** Invalid address range **/
+	}
+	else {
+		if (filename == "") {
+			status = STATUS_MISSING_OPERAND;          	/** Missing the file's name **/
+		}
+		else {
+			if (SD.exists(filename)) {
+				status = STATUS_FILE_EXISTS;   				/** The file already exists, so stop with error **/
+			}
+			else {
+				dataFile = SD.open(filename, FILE_WRITE); /** Try to create the file **/
+				if (!dataFile) {
+					status = STATUS_CANNOT_OPEN;           /** Cannot create the file **/
+				}
+				else {                                    /** Now we can finally write into the created file **/
+					for(i = startAddress; i <= endAddress; i++) {
+						data = cpeek(i);
+						dataFile.write(data);
+					}
+					dataFile.close();
+					status = STATUS_READY;
+				}
+			}
+		}
+	}
+	return status;
+}
+
+void catLoad(String filename, String startAddress, bool silent) {
+	unsigned int startAddr;
+	int status = STATUS_DEFAULT;
+	if (startAddress == "") {
+		startAddr = config_code_start;	/** If not otherwise specified, load file into start of code area **/
+	}
+	else {
+		startAddr = strtol(startAddress.c_str(), NULL, 16);	/** Convert address string to hexadecimal number **/
+	}
+	status = load(filename, startAddr);
+	if(!silent) {
+		cprintStatus(status);
+	}
+}
+
+int cmdLoad(unsigned int address) {
+	unsigned int startAddr = cpeekW(address);
+	unsigned int length = cpeekW(address + 2);
+	cpeekStr(address + 4, editLine, 38);
+	return load((char *)editLine, startAddr);
+}
+
+int load(String filename, unsigned int startAddr) {
   /** Loads a binary file from the uSD card into memory **/
   File dataFile;                                /** File for reading from on SD Card, if present **/
-  unsigned int addr;                            /** Address where to load the file into memory **/
-  if (filename == "") { if (!silent) cprintStatus(STATUS_MISSING_OPERAND); } /** Missing file name, so stop **/
+  unsigned int addr = startAddr;                /** Address where to load the file into memory **/
+  int status = STATUS_DEFAULT;
+  if (filename == "") {
+	  status = STATUS_MISSING_OPERAND;
+  }
   else {
-    if (address == "") addr = 0x0202;           /** If not otherwise specified, load file into start of code area **/
-    else addr = strtol(address.c_str(), NULL, 16); /** Convert address string to hexadecimal number **/
-    if (!SD.exists(filename)) { if (!silent) cprintStatus(STATUS_NO_FILE); } /** The file does not exist, so stop with error **/
+    if (!SD.exists(filename)) {
+		status = STATUS_NO_FILE;				/** The file does not exist, so stop with error **/
+	} 
     else {
-      dataFile = SD.open(filename);             /** Open the binary file **/
-      if (!dataFile) cprintStatus(STATUS_CANNOT_OPEN);           /** Cannot open the file **/
-      else {
-        while (dataFile.available()) {          /** While there is data to be read... **/
-          cpoke(addr, dataFile.read());         /** Read data from file and store it in memory **/
-          addr++;                               /** Increment address **/
-          if (addr == 0) {                      /** Break if address wraps around to the start of memory **/
-            dataFile.close();
-            break;
-          }
+      	dataFile = SD.open(filename);           /** Open the binary file **/
+      	if (!dataFile) {
+			status = STATUS_CANNOT_OPEN; 		/** Cannot open the file **/
+	  	}
+      	else {
+        	while (dataFile.available()) {		/** While there is data to be read... **/
+          	cpoke(addr++, dataFile.read());     /** Read data from file and store it in memory **/
+          	if (addr == 0) {                    /** Break if address wraps around to the start of memory **/
+            	dataFile.close();
+            	break;
+          	}
         }
         dataFile.close();
-        if (!silent) cprintStatus(STATUS_READY);
+		status = STATUS_READY;
       }
     }
   }
+  return status;
 }
 
 void cprintEditLine () {
@@ -853,4 +983,19 @@ byte cpeek(unsigned int address) {
   digitalWrite(AOE, LOW);
   data = readShiftRegister();
   return data;
+}
+
+unsigned int cpeekW(unsigned int address) {
+	return cpeek(address) + (256 * cpeek(address+1));
+}
+
+boolean cpeekStr(unsigned int address, byte * dest, int max) {
+	int i;
+	byte c;
+	for(i = 0; i < max; i++) {
+		c = cpeek(address + i);
+		dest[i] = c;
+		if(c == 0) return true;
+	}
+	return false;
 }

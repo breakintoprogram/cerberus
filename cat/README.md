@@ -10,6 +10,13 @@ The main differences are:
 - Data upload over Serial
 - 50hz NMI interrupt enabled when CPU is running
 - Boots with Z80 set at 8mhz as default
+- Two-way comms between CAT and CPUs
+- Tweaks to memory map
+	- 0x0200: Outgoing mailbox flag (to CPU)
+	- 0x0201: Outgoing mailbox data (to CPU)
+	- 0x0202: Incoming mailbox flag (from CPU)
+	- 0x0203: Incoming mailbox data (from CPU - word)
+	- 0x0205: Code start
 
 ### Data upload over Serial
 
