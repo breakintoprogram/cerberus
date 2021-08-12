@@ -1,0 +1,91 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Cerberus 2080 debug routines
+; Author:	Dean Belfield
+; Created:	12/08/2021
+; Last Updated:	12/08/2021
+;
+; Modinfo:
+
+			MODULE	CERBERUS_DEBUG 
+
+; Dump memory
+; HL: Start address
+; DE: Length
+;
+Memory_Dump:		LD	A, H
+			CALL	Print_Hex8
+			LD	A, L 
+			CALL	Print_Hex8
+			LD 	A, ':' : CALL CERBERUS_IO.Print_Char
+			PUSH	HL
+			PUSH	DE 
+			CALL	Get_Columns
+1:			LD	A, ' ' : CALL CERBERUS_IO.Print_Char
+			LD	A, (HL)
+			CALL 	Print_Hex8
+			INC	HL
+			DEC	DE
+			DEC 	B 
+			JR	Z, 3F
+			LD	A, D 
+			OR 	E
+			JR	NZ, 1B
+
+2:			LD	A, ' ' : CALL CERBERUS_IO.Print_Char
+			LD	A, ' ' : CALL CERBERUS_IO.Print_Char
+			LD	A, ' ' : CALL CERBERUS_IO.Print_Char
+			DJNZ	2B
+
+3:			POP	DE 
+			POP	HL
+			LD	A, ' ' : CALL CERBERUS_IO.Print_Char
+
+			CALL	Get_Columns 
+4:			LD	A, (HL)
+			CALL	Print_ASCII
+			INC	HL 
+			DEC	DE 
+			LD	A, D 
+			OR 	E 
+			JR	Z, 5F
+			DJNZ	4B
+			CALL	5F			; Print CR/LF
+			CALL	LTRAP 			; Check for ESC
+			JR	Memory_Dump
+5:			LD	A, 0x0D
+			CALL	CERBERUS_IO.Print_Char
+			LD	A, 0x0A 
+			JP	CERBERUS_IO.Print_Char
+
+; Get # columns to dump
+; 
+Get_Columns:		LD	B, 8
+			RET 
+
+;  A: Ascii char to print
+;
+Print_ASCII:		CP	127			; If > 127
+			JR	NC, 2F			; Skip to print '.'
+			CP	32			; If >= 32
+			JR	NC, 1F			; Skip to print character
+2:			LD	A,  '.'
+1:			JP	CERBERUS_IO.Print_Char
+
+;  A: Hex digit to print
+;
+Print_Hex8:		PUSH	AF			; Store the value
+			RLCA				; Move to bottom nibble
+			RLCA
+			RLCA 
+			RLCA
+			CALL	1F			; Print the first nibble
+			POP	AF
+1:			AND	0x0F			; Get the bottom nibble
+			ADD	A,0x90			; Convert to HEX
+			DAA 
+			ADC	A,0x40
+			DAA
+			JP	CERBERUS_IO.Print_Char	; Print
+
+			ENDMODULE
