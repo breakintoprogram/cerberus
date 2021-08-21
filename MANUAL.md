@@ -78,6 +78,14 @@ Examples:
 
 `VDU 22,1` Change to Mode 1
 
+### SOUND
+
+The same format as the BBC Model B sound command, though is not asynchronous. Volume and channel parameters are ignored.
+
+Example:
+
+`SOUND 0,0,100,50`
+
 ## STAR commands
 
 The star commands are all prefixed with an asterisk. These commands do not accept variables or expressions as parameters. Parameters are separated by spaces. Numeric parameters can be specified in hexadecimal by prefixing with an '&' character. Paths are unquoted. 
@@ -109,6 +117,14 @@ List contents of memory, hexdump and ASCII.
 Implemented as OSBYTE
 
 - `*FX 19`: Wait for an NMI interrupt
+
+### LOAD filename start length
+
+Load a file into memory
+
+### SAVE filename start length
+
+Save a block of memory as a file
 
 ## Other considerations
 
