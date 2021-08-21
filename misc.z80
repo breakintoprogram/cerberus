@@ -2,10 +2,11 @@
 ; Title:	BBC Basic for Cerberus 2080 - Miscellaneous helper functions
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	10/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
 ; 10/08/2021:	Fixed ASC_TO_NUMBER (removed Z80N instructions)
+; 13/08/2021:	Removed NULLTOSP, SPTONULL, NULLTOCR and CRTONULL
 
 ; Read a number and convert to binary
 ; If prefixed with &, will read as hex, otherwise decimal
@@ -90,31 +91,7 @@ UPPRC:  		AND     7FH
 
 ; Convert the buffer to a null terminated string and back
 ;	
-NULLTOSP:		PUSH	BC 
-			LD	B, 0
-			LD	C, ' '
-			JR	0F
-SPTONULL:		PUSH	BC 
-			LD	B, ' '
-			LD	C, 0
-			JR	0F
-NULLTOCR:		PUSH 	BC
-			LD	B, 0
-			LD	C, CR 
-			JR	0F
-CRTONULL:		PUSH	BC
-			LD	B, CR
-			LD	C, 0	
-0:			PUSH	HL
-1:			LD	A, (HL)
-			CP 	B 
-			JR	Z, 2F
-			INC	HL 
-			JR	1B
-2:			LD	(HL), C
-			POP 	HL 
-			POP	BC
-			RET
+
 
 ; Convert BCD to ASCII
 ; HL: Pointer in string buffer
