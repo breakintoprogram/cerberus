@@ -1,0 +1,76 @@
+;
+; Title:	BBC Basic Interpreter - Z80 version
+;		Spectrum Next Sound Routines
+; Author:	Dean Belfield
+; Created:	28/05/2021
+; Last Updated:	06/06/2021
+;
+; Notes:
+
+; Split over 5 complete octaves, with 53 being middle C
+; * C4: 262hz
+; + A4: 440hz
+;
+;	2	3	4	5	6	7	8
+;
+; B	1	49	97	145	193	241	
+; A#	0	45	93	141	189	237	
+; A		41	89+	137	185	233	
+; G#		37	85	133	181	229	
+; G		33	81	129	177	225	
+; F#		29	77	125	173	221	
+; F		25	73	121	169	217	
+; E		21	69	117	165	213	
+; D#		17	65	113	161	209	
+; D		13	61	109	157	205	253
+; C#		9	57	105	153	201	249
+; C		5	53*			101	149	197	245
+;
+; Modinfo:
+; 06/06/2021:	Added LUA script to create note table
+; 08/06/2021:	Queue_Note now uses LTRAP to test for ESC
+
+			MODULE	CERBERUS_SOUND
+
+Note_Table:		LUA ALLPASS
+			for i = 0, 255 do
+				f = 440*(2^((i-89)/48))
+				sj.add_word(math.floor(f+0.5))
+			end
+			ENDLUA
+
+Initialise:		RET 
+
+; Play a note
+;  A: Pitch
+; BC: Duration
+;
+Play_Note:		LD	DE, Note_Table		; Index into note table
+			LD	H, 0
+			LD	L, A 
+			ADD	HL, HL 
+			ADD	HL, DE
+			LD	E, (HL)			; DE: Note frequency
+			INC	HL 
+			LD	D, (HL)
+;
+			LD	IX, SOUND_BUFFER	; Sound buffer
+			LD	(IX + 0), E 		; Frequency
+			LD	(IX + 1), D 
+			LD	(IX + 2), C 		; Duration
+			LD	(IX + 3), B  
+;
+			LD	IX, Outbox_Flag		; Write out command to CAT
+			LD	(IX + 1), low SOUND_BUFFER
+			LD	(IX + 2), high SOUND_BUFFER 
+			LD	(IX + 0), 1
+;
+; Wait for the tone to finish
+;
+1:			HALT
+			LD	A, (IX + 0)		; Check the outbound flag
+			CP	1			; Has the CAT changed it from 1?
+			JR	Z, 1B			; No, so keep on waiting			
+			RET 
+
+			ENDMODULE
