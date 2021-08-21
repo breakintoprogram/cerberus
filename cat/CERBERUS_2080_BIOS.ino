@@ -41,8 +41,8 @@
 #include <TimerOne.h>
 
 /** Compilation defaults **/
-#define	config_dev_mode	1			// Turn off various BIOS outputs to speed up development, specifically uploading code
-#define config_silent 1				// Turn off the startup jingle
+#define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
+#define config_silent 0				// Turn off the startup jingle
 #define config_enable_nmi 1			// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
 #define config_default_cpu 1		// 0: 6502, 1: Z80
 #define config_default_speed 1		// 0: 4mhz, 1: 8mhz
