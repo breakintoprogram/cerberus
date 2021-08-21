@@ -3,9 +3,15 @@
 ;		Useful macros
 ; Author:	Dean Belfield
 ; Created:	10/08/2021
-; Last Updated:	10/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
+; 13/08/2021:	Added EXREG
+
+		MACRO	EXREG rp1, rp2
+		PUSH 	rp1 
+		POP	rp2
+		ENDM
 
 		MACRO 	ADD8U reg
 		ADD	A, low reg 
