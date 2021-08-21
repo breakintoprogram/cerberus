@@ -2,13 +2,14 @@
 ; Title:	BBC Basic for Cerberus 2080 - Main build file
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	12/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
 ; 10/08/2021:	Added macros.z80, changed mailbox labels
 ; 12/08/2021:	Added cerberus_debug.z80 and cerberus_dos.z80
+; 13/08/2021:	Added cerberus_sound.z80
 
-			DEFINE BUILD_VERSION "0.02"	; Build version
+			DEFINE BUILD_VERSION "0.03"	; Build version
 ;
 ; Memory map
 ;
@@ -37,6 +38,7 @@ CHAR_ROWS:		EQU	30			; Screen height in chars
 			include "cerberus_cursor.z80"	; Cursor
 			include "cerberus_debug.z80"	; Debug
 			include "cerberus_dos.z80"	; File I/O routines
+			include "cerberus_sound.z80"	; Sound routines
 ;
 ; Other generic Z80N helper functions
 ;
