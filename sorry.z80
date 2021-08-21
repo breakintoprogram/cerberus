@@ -3,10 +3,11 @@
 ;		Catch-all for unimplemented functionality
 ; Author:	Dean Belfield
 ; Created:	02/05/2021
-; Last Updated:	10/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
 ; 10/08/2021:	Moved POINT and GCOL to patch.z80
+; 13/08/2021:	Moved SOUND to patch.z80
 		
 			MODULE SORRY
 
@@ -14,7 +15,6 @@
 @COLOUR:
 @ENVEL:
 @MODE:
-@SOUND:
 @ADVAL:
 @GETIMS:
 @PUTIMS:
