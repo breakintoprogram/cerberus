@@ -2,10 +2,11 @@
 ; Title:	BBC Basic for Cerberus 2080
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	12/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
 ; 12/08/2021:	Added POINT, GCOL, LOAD and SAVE and STAR commands BYE, MEMDUMP, FX, ERASE, DELETE
+; 13/08/2021:	Added STAR commands LOAD and SAVE
 			
 			MODULE PATCH
 
@@ -190,7 +191,9 @@ COMDS:  		DC	'BYE': DEFW STAR_BYE	; Exit to BIOS
 			DC	'DELETE': DEFW STAR_DELETE
 			DC	'ERASE': DEFW STAR_DELETE
 			DC	'FX': DEFW STAR_FX	; FX command
+			DC	'LOAD': DEFW STAR_LOAD
 			DC	'MEMDUMP': DEFW STAR_MEMDUMP
+			DC	'SAVE': DEFW STAR_SAVE
 			DC	'TEST': DEFW STAR_TEST 
 			DEFB	0FFH	
 
@@ -219,17 +222,32 @@ STAR_MEMDUMP		CALL	ASC_TO_NUMBER	; Get start address
 			POP	HL 		; Get start address in HL
 			JP	CERBERUS_DEBUG.Memory_Dump
 
+; *LOAD file addr
+;
+STAR_LOAD:		CALL	SKIPSP		; First parameter is a string
+			PUSH	HL		; Stack the string pointer
+			CALL	SKIPNOTSP	; Skip to the next parameter
+			CALL	ASC_TO_NUMBER	; DE: Address
+			POP	HL		; HL: Pointer to Filename
+			LD	BC, -1		; Maximum number of bytes
+			JP	CERBERUS_DOS.Load 
+
+; *SAVE file addr len
+;
+STAR_SAVE:		CALL	SKIPSP		; First parameter is a string
+			PUSH	HL		; Stack the string pointer
+			CALL	SKIPNOTSP	; Skip to the next parameter
+			CALL	ASC_TO_NUMBER	; Read address
+			PUSH	DE 
+			CALL	ASC_TO_NUMBER	; Read length
+			EXREG	DE, BC		; BC: Length
+			POP	DE 		; DE: Start address
+			POP	HL		; HL: Pointer to Filename
+			JP	CERBERUS_DOS.Save 
+			
 ; *TEST 
 ;
-STAR_TEST		PUSH	IX 
-			LD	IX, Outbox_Flag
-			CALL	ASC_TO_NUMBER
-			LD	(IX + 1), E 
-			CALL	ASC_TO_NUMBER
-			LD	(IX + 2), E 
-			LD	(IX + 0), 1
-			POP	IX 
-			RET
+STAR_TEST		RET
 
 ; *FX
 ;
@@ -390,6 +408,20 @@ OSBYTE_13:		HALT
 ; Destroys: A,B,C,D,E,H,L,F
 ;
 @OSSAVE:		JP	CERBERUS_DOS.Save
+
+; SOUND channel,volume,pitch,duration
+; volume: 0 (off) to -15 (full volume)
+; pitch: 0 - 255
+; duration: -1 to 254 (duration in 20ths of a second, -1 = play forever)
+;
+@SOUND:			CALL	EXPR_P2		; DE: Channel/Control, HL: Volume - ignored
+			CALL	COMMA
+			CALL	EXPR_P2		; DE: Pitch, HL: Duration
+			LD	B, H
+			LD	C, L 
+			LD	A, E 
+			CALL	CERBERUS_SOUND.Play_Note
+			JP	XEQ
 
 ; Get two values from EXPR in DE, HL
 ; IY: Pointer to expression string
