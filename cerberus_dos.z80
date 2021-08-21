@@ -3,9 +3,10 @@
 ;		Cerberus 2080 File IO routines
 ; Author:	Dean Belfield
 ; Created:	12/08/2021
-; Last Updated:	12/08/2021
+; Last Updated:	13/08/2021
 ;
 ; Modinfo:
+; 13/08/2021:	Tweaked error codes
 
 			MODULE	CERBERUS_DOS
 
@@ -66,7 +67,7 @@ CAT_FILECMD_3P:		PUSH	IX
 CAT_FILECMD:		LD	B, 60 
 			LD	C, A 			; Store the command #
 1:			LD	A, (HL)
-			CP	CR 
+			CP	CR 			; Files can be terminated by CR (LOAD and SAVE)
 			JR	Z, 2F
 			LD	(IX + 0), A 
 			INC	IX 
@@ -124,6 +125,7 @@ Error:			AND 	0x7F			; Clear the top bit
 ;
 Error_Codes:		DEFB	4, "No such file or directory", 0
 			DEFB	5, "Unable to open file", 0
+			DEFB	6, "Missing filename", 0
 			DEFB	8, "Already exists", 0
 			DEFB	127, "Filename too long", 0
 			DEFB	255, "Error", 0
