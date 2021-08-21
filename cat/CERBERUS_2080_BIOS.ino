@@ -18,12 +18,13 @@
 
 /** Updated By:		Dean Belfield	**/
 /** Created:		31/07/2021		**/
-/** Last Updated:	12/08/2021 		**/
+/** Last Updated:	21/08/2021 		**/
 
 //	Modinfo:
 //	10/08/2021:	All recognised keystrokes sent to mailbox, F12 now returns to BIOS, 50hz NMI starts when code runs
 //	11/08/2021:	Memory map now defined in configs, moved code start to 0x0205 to accomodate inbox
 //	12/08/2021:	Refactored load, save and delFile. Now handles incoming messages from Z80/6502
+//	21/08/2021:	Tweaks for sound command, bug fixes in incoming message handler
 
 #include <SPI.h>
 #include <SD.h>
@@ -40,8 +41,8 @@
 #include <TimerOne.h>
 
 /** Compilation defaults **/
-#define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
-#define config_silent 0				// Turn off the startup jingle
+#define	config_dev_mode	1			// Turn off various BIOS outputs to speed up development, specifically uploading code
+#define config_silent 1				// Turn off the startup jingle
 #define config_enable_nmi 1			// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
 #define config_default_cpu 1		// 0: 6502, 1: Z80
 #define config_default_speed 1		// 0: 4mhz, 1: 8mhz
@@ -101,8 +102,7 @@ volatile char previousEditLine[38];
 volatile byte pos = 1;						/** Position in edit line currently occupied by cursor **/
 volatile bool mode = config_default_cpu;	/** false = 6502 mode, true = Z80 mode**/
 volatile bool cpurunning = false;			/** true = CPU is running, CAT should not use the buses **/
-volatile bool intbusfree = true;			/** true = Main loop allows the interrupt to read the bus **/
-volatile bool resetCAT = false;				/** true = Reset the CAT **/
+volatile bool interruptFlag = false;		/** true = Triggered by interrupt **/
 volatile bool fast = config_default_speed;	/** true = 8 MHz CPU clock, false = 4 MHz CPU clock **/
 
 void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **/
@@ -110,113 +110,101 @@ void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **
 PS2Keyboard keyboard;
 
 void setup() {
-  /** First, declaring all the pins **/
-  pinMode(SO, OUTPUT);
-  pinMode(SI, INPUT);               /** There will be pull-up and pull-down resistors in circuit **/
-  pinMode(SC, OUTPUT);
-  pinMode(AOE, OUTPUT);
-  pinMode(LD, OUTPUT);
-  pinMode(RW, OUTPUT);
-  pinMode(CPUSPD, OUTPUT);
-  pinMode(KCLK, INPUT_PULLUP);      /** But here we need CAT's internal pull-up resistor **/
-  pinMode(KDAT, INPUT_PULLUP);      /** And here too **/
-  pinMode(CPUSLC, OUTPUT);
-  pinMode(CPUIRQ, OUTPUT);
-  pinMode(CPUGO, OUTPUT);
-  pinMode(CPURST, OUTPUT);
-  pinMode(SOUND, OUTPUT);
-  /** Writing default values to some of the output pins **/
-  digitalWrite(RW, HIGH);
-  digitalWrite(SO, LOW);
-  digitalWrite(AOE, LOW);
-  digitalWrite(LD, LOW);
-  digitalWrite(SC, LOW);
-  digitalWrite(CPUSPD, config_default_speed);
-  digitalWrite(CPUSLC, config_default_cpu);
-  digitalWrite(CPUIRQ, LOW);
-  digitalWrite(CPUGO, LOW);
-  digitalWrite(CPURST, LOW);
-  /** Now reset the CPUs **/
-  resetCPUs();
-  /** Clear edit line **/
-  clearEditLine();
-  storePreviousLine();
-  Serial.begin(9600);
-   
-  /** Initialize keyboard library **/
-  keyboard.begin(DataPin, IRQpin);
-  /** Now access uSD card and load character definitions so we can put something on the screen **/
-  if (!SD.begin(chipSelect)) {
-    /** SD Card has either failed or is not present **/
-    /** Since the character definitions thus can't be uploaded, accuse error with repeated tone and hang **/
-    while(true) {
-      tone(SOUND, 50, 150);
-      delay(500);
-    }
-  }
-  /******************************************************/
-  /** Load character definitions into character memory **/
-  /**                                                  **/
-  /** The sequence of instructions below does the same **/
-  /** as the function load(). That function is         **/
-  /** not called from here, in the setup(), to avoid a **/
-  /** seeming bug that prevents the same file from     **/
-  /** being opened from both setup() and loop().       **/
-  /******************************************************/
-  unsigned int addr = 0xf000;
-  if (!SD.exists("chardefs.bin")) tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
-  else {
-    File dataFile1 = SD.open("chardefs.bin"); /** Open the binary file **/
-    if (!dataFile1) tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
-    else {
-      while (dataFile1.available()) {         /** While there is data to be read... **/
-        cpoke(addr, dataFile1.read());        /** Read data from file and store it in memory **/
-        addr++;                               /** Increment address **/
-        if (addr == 0) {                      /** Break if address wraps around to the start of memory **/
-          dataFile1.close();
-          break;
-        }
-      }
-      dataFile1.close();
-    }
-  }
-  /**********************************************************/
-  /** Now prepare the screen **/
-  ccls();
-  cprintFrames();
-  /** Load the CERBERUS icon image on the screen ************/
-  int inChar;
-  if (!SD.exists("cerbicon.img")) tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
-  else {
-    File dataFile2 = SD.open("cerbicon.img"); /** Open the image file **/
-    if (!dataFile2) tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
-    else {
-      for (byte y = 2; y <= 25; y++)
-        for (byte x = 2; x <= 39; x++) {
-          String tokenText = "";
-          while (isDigit(inChar = dataFile2.read())) tokenText += char(inChar);
-          cprintChar(x, y, tokenText.toInt());
-        }
-      dataFile2.close();
-    }
-  }
-  /**********************************************************/
-  cprintStatus(STATUS_BOOT);
-  /** Play a little jingle while keyboard finishes initializing **/
-  #if config_silent == 0
-  playJingle();
-  #endif
-  delay(1000);
-  cprintStatus(STATUS_DEFAULT);
-  cprintEditLine();
+	/** First, declaring all the pins **/
+  	pinMode(SO, OUTPUT);
+  	pinMode(SI, INPUT);               /** There will be pull-up and pull-down resistors in circuit **/
+  	pinMode(SC, OUTPUT);
+  	pinMode(AOE, OUTPUT);
+  	pinMode(LD, OUTPUT);
+  	pinMode(RW, OUTPUT);
+  	pinMode(CPUSPD, OUTPUT);
+  	pinMode(KCLK, INPUT_PULLUP);      /** But here we need CAT's internal pull-up resistor **/
+  	pinMode(KDAT, INPUT_PULLUP);      /** And here too **/
+  	pinMode(CPUSLC, OUTPUT);
+  	pinMode(CPUIRQ, OUTPUT);
+  	pinMode(CPUGO, OUTPUT);
+  	pinMode(CPURST, OUTPUT);
+  	pinMode(SOUND, OUTPUT);
+  	/** Writing default values to some of the output pins **/
+  	digitalWrite(RW, HIGH);
+  	digitalWrite(SO, LOW);
+  	digitalWrite(AOE, LOW);
+  	digitalWrite(LD, LOW);
+  	digitalWrite(SC, LOW);
+  	digitalWrite(CPUSPD, config_default_speed);
+  	digitalWrite(CPUSLC, config_default_cpu);
+  	digitalWrite(CPUIRQ, LOW);
+  	digitalWrite(CPUGO, LOW);
+  	digitalWrite(CPURST, LOW);
+  	/** Now reset the CPUs **/
+  	resetCPUs();
+  	/** Clear edit line **/
+  	clearEditLine();
+  	storePreviousLine();
+  	Serial.begin(9600);
+	/** Initialize keyboard library **/
+  	keyboard.begin(DataPin, IRQpin);
+  	/** Now access uSD card and load character definitions so we can put something on the screen **/
+  	if (!SD.begin(chipSelect)) {
+    	/** SD Card has either failed or is not present **/
+    	/** Since the character definitions thus can't be uploaded, accuse error with repeated tone and hang **/
+    	while(true) {
+      		tone(SOUND, 50, 150);
+      		delay(500);
+    	}
+  	}
+  	/** Load character defs into memory **/
+  	if(load("chardefs.bin", 0xf000) != STATUS_READY) {
+		tone(SOUND, 50, 150);
+	  }
+  	/**********************************************************/
+  	/** Now prepare the screen **/
+  	ccls();
+  	cprintFrames();
+  	/** Load the CERBERUS icon image on the screen ************/
+  	int inChar;
+  	if(!SD.exists("cerbicon.img")) {
+		tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
+	}
+  	else {
+    	File dataFile2 = SD.open("cerbicon.img"); /** Open the image file **/
+    	if (!dataFile2) {
+			tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
+		}
+    	else {
+      		for (byte y = 2; y <= 25; y++) {
+        		for (byte x = 2; x <= 39; x++) {
+	          		String tokenText = "";
+          			while (isDigit(inChar = dataFile2.read())) {
+						tokenText += char(inChar);
+					}
+          			cprintChar(x, y, tokenText.toInt());
+        		}
+			}
+      		dataFile2.close();
+    	}
+  	}
+  	/**********************************************************/
+  	cprintStatus(STATUS_BOOT);
+  	/** Play a little jingle while keyboard finishes initializing **/
+  	#if config_silent == 0
+  	playJingle();
+  	#endif
+  	delay(1000);
+  	cprintStatus(STATUS_DEFAULT);
+  	cprintEditLine();
 }
 
 char readKey() {
 	char ascii = 0;
 	if(keyboard.available()) {
 		ascii = keyboard.read();
-    tone(SOUND, 750, 5);            /** Clicking sound for auditive feedback to key presses **/
-  	if (!cpurunning) cprintStatus(STATUS_DEFAULT);/** Update status bar **/	
+    	tone(SOUND, 750, 5);            	/** Clicking sound for auditive feedback to key presses **/
+		#if config_dev_mode == 0        	
+  		if(!cpurunning) {
+			cprintStatus(STATUS_DEFAULT);	/** Update status bar **/	
+		}
+		#endif 
 	}
 	else if(Serial.available()) {
 		ascii = Serial.read();
@@ -224,23 +212,26 @@ char readKey() {
 	return ascii;
 }
 
+// The main loop
+//
 void loop() {
 	char ascii = readKey();	/** Stores ascii value of key pressed **/
 	byte i;     			/** Just a counter **/
 
   	/** Wait for a key to be pressed, then take it from there... **/
 	if(ascii > 0) {
-		intbusfree = false;
     	if(cpurunning) {
     		if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
 	    		stopCode();
     		}
     		else {
+				cpurunning = false;						/** Just stops interrupts from happening **/
         		digitalWrite(CPUGO, LOW);   			/** Pause the CPU and tristate its buses to high-Z **/
       			byte mode = cpeek(config_outbox_flag);
       			cpoke(config_outbox_data, ascii);       /** Put token code of pressed key in the CPU's mailbox, at config_outbox_data **/
 	         	cpoke(config_outbox_flag, 0x01);		/** Flag that there is new mail for the CPU waiting at the mailbox **/
       			digitalWrite(CPUGO, HIGH);  			/** Let the CPU go **/
+				cpurunning = true;
       			#if config_enable_nmi == 0
       			digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
       			digitalWrite(CPUIRQ, LOW);
@@ -279,9 +270,101 @@ void loop() {
         			break;        
 			}
 		}    
-		intbusfree = true;
 	}
-	if(resetCAT) resetFunc();			/** Reset the CAT **/
+	if(interruptFlag) {						/** If the interrupt flag is set then **/
+		interruptFlag = false;
+		messageHandler();					/** Run the inbox message handler **/
+	}
+}
+
+// CPU Interrupt Routine (50hz)
+//
+void cpuInterrupt(void) {
+  	if(cpurunning) {							// Only run this code if cpu is running 
+	   	digitalWrite(CPUIRQ, HIGH);		 		// Trigger an NMI interrupt
+	   	digitalWrite(CPUIRQ, LOW);
+  	}
+	interruptFlag = true;
+}
+
+// Inbox message handler
+//
+void messageHandler(void) {
+  	int	flag, status;
+  	byte retVal = 0x00;							// Return status; default is OK
+  	unsigned int address;						// Pointer for data
+
+ 	if(cpurunning) {							// Only run this code if cpu is running 
+	 	cpurunning = false;						// Just to prevent interrupts from happening
+		digitalWrite(CPUGO, LOW); 				// Pause the CPU and tristate its buses to high-Z
+		flag = cpeek(config_inbox_flag);		// Fetch the inbox flag 
+		if(flag > 0 && flag < 0x80) {
+			address = cpeekW(config_inbox_data);
+			switch(flag) {
+				case 0x01:
+					cmdSound(address);
+					break;
+				case 0x02: 
+					status = cmdLoad(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x03:
+					status = cmdSave(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x04:
+					status = cmdDelFile(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x7F:
+					resetFunc();
+					break;
+			}
+			cpoke(config_inbox_flag, retVal);	// Flag we're done - values >= 0x80 are error codes
+		}
+		digitalWrite(CPUGO, HIGH);   			// Restart the CPU 
+		cpurunning = true;
+ 	}
+}
+
+// Handle SOUND command from BASIC
+//
+void cmdSound(unsigned int address) {
+	unsigned int frequency = cpeekW(address);
+	unsigned int duration = cpeekW(address + 2) * 50;
+	tone(SOUND, frequency, duration);
+	delay(duration);
+}
+
+// Handle ERASE command from BASIC
+//
+int cmdDelFile(unsigned int address) {
+	cpeekStr(address, editLine, 38);
+	return delFile((char *)editLine);	
+}
+
+// Handle LOAD command from BASIC
+//
+int cmdLoad(unsigned int address) {
+	unsigned int startAddr = cpeekW(address);
+	unsigned int length = cpeekW(address + 2);
+	cpeekStr(address + 4, editLine, 38);
+	return load((char *)editLine, startAddr);
+}
+
+// Handle SAVE command from BASIC
+//
+int cmdSave(unsigned int address) {
+	unsigned int startAddr = cpeekW(address);
+	unsigned int length = cpeekW(address + 2);
+	cpeekStr(address + 4, editLine, 38);
+	return save((char *)editLine, startAddr, startAddr + length - 1);
 }
 
 /************************************************************************************************/
@@ -359,7 +442,7 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     cprintStatus(STATUS_READY);
   /** RESET *********************************************************************************/
   } else if (nextWord == F("reset")) {
-    resetCAT = true;                      /** This resets CAT and, therefore, the CPUs too **/
+    resetFunc();						  /** This resets CAT and, therefore, the CPUs too **/
   /** FAST **********************************************************************************/
   } else if (nextWord == F("fast")) {     /** Sets CPU clock at 8 MHz **/
     digitalWrite(CPUSPD, HIGH);
@@ -553,55 +636,6 @@ void stopCode() {
     clearEditLine();            /** Clear and display the edit line **/
 }
 
-
-/**
- * CPU interrupt routine
- */
-void cpuInterrupt(void) {
-  int	flag, status;
-  byte	retVal = 0x00;							// Return status; default is OK
-  unsigned int address;							// Pointer for data
-
-  if( cpurunning) {								// Only run this code if cpu is running 
-	if( intbusfree ) {							// We can only do this bit if the main loop is not doing stuff on the bus
-    	digitalWrite(CPUGO, LOW); 				// Pause the CPU and tristate its buses to high-Z
-		flag = cpeek(config_inbox_flag);		// Fetch the inbox flag 
-		if(flag != 0) {
-			address = cpeekW(config_inbox_data);
-			switch(flag) {
-				case 0x01:
-					break;
-				case 0x02: 
-					status = cmdLoad(address);
-					if(status != STATUS_READY) {
-						retVal = (byte)(status + 0x80);
-					}
-					break;
-				case 0x03:
-					status = cmdSave(address);
-					if(status != STATUS_READY) {
-						retVal = (byte)(status + 0x80);
-					}
-					break;
-				case 0x04:
-					status = cmdDelFile(address);
-					if(status != STATUS_READY) {
-						retVal = (byte)(status + 0x80);
-					}
-					break;
-				case 0x7F:
-					resetCAT = true;
-					break;
-			}
-			cpoke(config_inbox_flag, retVal);	// Flag we're done - values >= 0x80 are error codes
-		}
-    	digitalWrite(CPUGO, HIGH);   			// Restart the CPU 
-	}
-   	digitalWrite(CPUIRQ, HIGH);		 			// Trigger an NMI interrupt
-   	digitalWrite(CPUIRQ, LOW);
-  }
-}
-
 void dir() {
   /** Lists the files in the root directory of uSD card, if available **/
   byte y = 2;                     /** Screen line **/
@@ -643,11 +677,6 @@ void catDelFile(String filename) {
 	cprintStatus(delFile(filename));
 }
 
-int cmdDelFile(unsigned int address) {
-	cpeekStr(address, editLine, 38);
-	return delFile((char *)editLine);	
-}
-
 int delFile(String filename) {
 	int status = STATUS_DEFAULT;
   	/** Deletes a file from the uSD card **/
@@ -679,13 +708,6 @@ void catSave(String filename, String startAddress, String endAddress) {
 		}
 	}
 	cprintStatus(status);
-}
-
-int cmdSave(unsigned int address) {
-	unsigned int startAddr = cpeekW(address);
-	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, editLine, 38);
-	return save((char *)editLine, startAddr, startAddr + length - 1);
 }
 
 int save(String filename, unsigned int startAddress, unsigned int endAddress) {
@@ -739,13 +761,6 @@ void catLoad(String filename, String startAddress, bool silent) {
 	}
 }
 
-int cmdLoad(unsigned int address) {
-	unsigned int startAddr = cpeekW(address);
-	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, editLine, 38);
-	return load((char *)editLine, startAddr);
-}
-
 int load(String filename, unsigned int startAddr) {
   /** Loads a binary file from the uSD card into memory **/
   File dataFile;                                /** File for reading from on SD Card, if present **/
@@ -780,209 +795,216 @@ int load(String filename, unsigned int startAddr) {
 }
 
 void cprintEditLine () {
-  byte i;
-  for (i = 0; i < 38; i++) cprintChar(i + 2, 29, editLine[i]);
+  	byte i;
+  	for (i = 0; i < 38; i++) cprintChar(i + 2, 29, editLine[i]);
 }
 
 void clearEditLine() {
-  /** Resets the contents of edit line and reprints it **/
-  byte i;
-  editLine[0] = 62;
-  editLine[1] = 0;
-  for (i = 2; i < 38; i++) editLine[i] = 32;
-  pos = 1;
-  cprintEditLine();
+  	/** Resets the contents of edit line and reprints it **/
+  	byte i;
+  	editLine[0] = 62;
+  	editLine[1] = 0;
+  	for (i = 2; i < 38; i++) editLine[i] = 32;
+  	pos = 1;
+  	cprintEditLine();
 }
 
 void storePreviousLine() {
-  for (byte i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
+	for (byte i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
 }
 
 void cprintStatus(byte status) {
-  switch( status ) {
-    case STATUS_BOOT:
-      /** REMEMBER: The macro "F()" simply tells the compiler to put the string in code memory, so to save dynamic memory **/
-      center(F("Here we go! Hang on..."));
-      break;
-    case STATUS_READY:
-      center(F("Alright, done!"));
-      break;
-    case STATUS_UNKNOWN_COMMAND:
-      center(F("Darn, unrecognized command"));
-      tone(SOUND, 50, 150);
-      break;
-    case STATUS_NO_FILE:
-      center(F("Oops, file doesn't seem to exist"));
-      tone(SOUND, 50, 150);
-      break;
-    case STATUS_CANNOT_OPEN:
-      center(F("Oops, couldn't open the file"));
-      tone(SOUND, 50, 150);
-      break;
-    case STATUS_MISSING_OPERAND:
-      center(F("Oops, missing an operand!!"));
-      tone(SOUND, 50, 150);
-      break;
-    case STATUS_SCROLL_PROMPT:
-      center(F("Press a key to scroll, ESC to stop"));
-      break;
-    case STATUS_FILE_EXISTS:
-      center(F("The file already exists!"));
-      break;
-    case STATUS_ADDRESS_ERROR:
-      center(F("Oops, invalid address range!"));
-      break;
-    case STATUS_POWER:
-      center(F("Feel the power of Dutch design!!"));
-      break;
-    default:
-      cprintString(2, 27, F("      CERBERUS 2080: "));
-      if (mode) cprintString(23, 27, F(" Z80, "));
-      else cprintString(23, 27, F("6502, "));
-      if (fast) cprintString(29, 27, F("8 MHz"));
-      else cprintString(29, 27, F("4 MHz"));
-      cprintString(34, 27, F("     "));
-  }
+  	/** REMEMBER: The macro "F()" simply tells the compiler to put the string in code memory, so to save dynamic memory **/
+  	switch( status ) {
+    	case STATUS_BOOT:
+      		center(F("Here we go! Hang on..."));
+      		break;
+    	case STATUS_READY:
+      		center(F("Alright, done!"));
+      		break;
+    	case STATUS_UNKNOWN_COMMAND:
+      		center(F("Darn, unrecognized command"));
+      		tone(SOUND, 50, 150);
+      		break;
+    	case STATUS_NO_FILE:
+      		center(F("Oops, file doesn't seem to exist"));
+      		tone(SOUND, 50, 150);
+      		break;
+    	case STATUS_CANNOT_OPEN:
+      		center(F("Oops, couldn't open the file"));
+      		tone(SOUND, 50, 150);
+      		break;
+    	case STATUS_MISSING_OPERAND:
+      		center(F("Oops, missing an operand!!"));
+      		tone(SOUND, 50, 150);
+      		break;
+    	case STATUS_SCROLL_PROMPT:
+      		center(F("Press a key to scroll, ESC to stop"));
+      		break;
+    	case STATUS_FILE_EXISTS:
+      		center(F("The file already exists!"));
+      	break;
+    		case STATUS_ADDRESS_ERROR:
+      	center(F("Oops, invalid address range!"));
+      		break;
+    	case STATUS_POWER:
+      		center(F("Feel the power of Dutch design!!"));
+      		break;
+    	default:
+      		cprintString(2, 27, F("      CERBERUS 2080: "));
+      		if (mode) cprintString(23, 27, F(" Z80, "));
+      		else cprintString(23, 27, F("6502, "));
+      		if (fast) cprintString(29, 27, F("8 MHz"));
+      		else cprintString(29, 27, F("4 MHz"));
+      		cprintString(34, 27, F("     "));
+  	}
 }
 
 void center(String text) {
-  clearLine(27);
-  cprintString(2+(38-text.length())/2, 27, text);
+  	clearLine(27);
+  	cprintString(2+(38-text.length())/2, 27, text);
 }
 
 void playJingle() {
-  delay(500);           /** Wait for possible preceding keyboard click to end **/
-  tone(SOUND, 261, 50);
-  delay(150);
-  tone(SOUND, 277, 50);
-  delay(150);
-  tone(SOUND, 261, 50);
-  delay(150);
-  tone(SOUND, 349, 500);
-  delay(250);
-  tone(SOUND, 261, 50);
-  delay(150);
-  tone(SOUND, 349, 900);
+  	delay(500);           /** Wait for possible preceding keyboard click to end **/
+  	tone(SOUND, 261, 50);
+  	delay(150);
+  	tone(SOUND, 277, 50);
+  	delay(150);
+  	tone(SOUND, 261, 50);
+  	delay(150);
+  	tone(SOUND, 349, 500);
+  	delay(250);
+  	tone(SOUND, 261, 50);
+  	delay(150);
+  	tone(SOUND, 349, 900);
 }
 
 void cls() {
-  /** This clears the screen only WITHIN the main frame **/
-  unsigned int y;
-  for (y = 2; y <= 25; y++)
-    clearLine(y);
+  	/** This clears the screen only WITHIN the main frame **/
+  	unsigned int y;
+  	for (y = 2; y <= 25; y++) {
+    	clearLine(y);
+	}
 }
 
 void clearLine(byte y) {
-  unsigned int x;
-  for (x = 2; x <= 39; x++)
-      cprintChar(x, y, 32);
+  	unsigned int x;
+  	for (x = 2; x <= 39; x++) {
+    	cprintChar(x, y, 32);
+	}
 }
 
 void ccls() {
-  /** This clears the entire screen **/
-  unsigned int x;
-  for (x = 0; x < 1200; x++)
-    cpoke(0xF800 + x, 32);        /** Video memory addresses start at 0XF800 **/
+  	/** This clears the entire screen **/
+  	unsigned int x;
+  	for (x = 0; x < 1200; x++) {
+	    cpoke(0xF800 + x, 32);        /** Video memory addresses start at 0XF800 **/
+	}
 }
 
 void cprintFrames() {
-  unsigned int x;
-  unsigned int y;
-  /** First print horizontal bars **/
-  for (x = 2; x <= 39; x++) {
-    cprintChar(x, 1, 3);
-    cprintChar(x, 30, 131);
-    cprintChar(x, 26, 3);
-  }
-  /** Now print vertical bars **/
-  for (y = 1; y <= 30; y++) {
-    cprintChar(1, y, 133);
-    cprintChar(40, y, 5);
-  }
+  	unsigned int x;
+  	unsigned int y;
+  	/** First print horizontal bars **/
+  	for (x = 2; x <= 39; x++) {
+	    cprintChar(x, 1, 3);
+	    cprintChar(x, 30, 131);
+	    cprintChar(x, 26, 3);
+  	}
+  	/** Now print vertical bars **/
+  	for (y = 1; y <= 30; y++) {
+	    cprintChar(1, y, 133);
+	    cprintChar(40, y, 5);
+  	}
 }
 
 void cprintString(byte x, byte y, String text) {
-  unsigned int i;
-  for (i = 0; i < text.length(); i++) {
-    if (((x + i) > 1) && ((x + i) < 40)) cprintChar(x + i, y, text[i]);
-  }
+  	unsigned int i;
+  	for (i = 0; i < text.length(); i++) {
+	    if (((x + i) > 1) && ((x + i) < 40)) {
+			cprintChar(x + i, y, text[i]);
+		}
+  	}
 }
 
 void cprintChar(byte x, byte y, byte token) {
-  /** First, calculate address **/
-  unsigned int address = 0xF800 + ((y - 1) * 40) + (x - 1); /** Video memory addresses start at 0XF800 **/
-  cpoke(address, token);
+  	/** First, calculate address **/
+  	unsigned int address = 0xF800 + ((y - 1) * 40) + (x - 1); /** Video memory addresses start at 0XF800 **/
+  	cpoke(address, token);
 }
 
 void testMem() {
-  /** Tests that all four memories are accessible for reading and writing **/
-  unsigned int x;
-  byte i = 0;
+  	/** Tests that all four memories are accessible for reading and writing **/
+  	unsigned int x;
+  	byte i = 0;
     for (x = 0; x < 874; x++) {
-    cpoke(x, i);                                           /** Write to low memory **/
-    cpoke(0x8000 + x, cpeek(x));                           /** Read from low memory and write to high memory **/
-    cpoke(addressTranslate(0xF800 + x), cpeek(0x8000 + x));/** Read from high mem, write to VMEM, read from character mem **/
-    if (i < 255) i++;
-    else i = 0;
-  }
+    	cpoke(x, i);                                           /** Write to low memory **/
+    	cpoke(0x8000 + x, cpeek(x));                           /** Read from low memory and write to high memory **/
+    	cpoke(addressTranslate(0xF800 + x), cpeek(0x8000 + x));/** Read from high mem, write to VMEM, read from character mem **/
+    	if (i < 255) i++;
+    	else i = 0;
+  	}
 }
 
 unsigned int addressTranslate (unsigned int virtualAddress) {
-  byte numberVirtualRows;
-  numberVirtualRows = (virtualAddress - 0xF800) / 38;
-  return((virtualAddress + 43) + (2 * (numberVirtualRows - 1)));
+  	byte numberVirtualRows;
+  	numberVirtualRows = (virtualAddress - 0xF800) / 38;
+  	return((virtualAddress + 43) + (2 * (numberVirtualRows - 1)));
 }
 
-void resetCPUs() {            /** Self-explanatory **/
-  digitalWrite(CPURST, LOW);
-  digitalWrite(CPUSLC, LOW);  /** First reset the 6502 **/
-  digitalWrite(CPUGO, HIGH);
-  delay(50);
-  digitalWrite(CPURST, HIGH);
-  digitalWrite(CPUGO, LOW);
-  delay(50);
-  digitalWrite(CPURST, LOW);
-  digitalWrite(CPUSLC, HIGH); /** Now reset the Z80 **/
-  digitalWrite(CPUGO, HIGH);
-  delay(50);
-  digitalWrite(CPURST, HIGH);
-  digitalWrite(CPUGO, LOW);
-  delay(50);
-  digitalWrite(CPURST, LOW);
-  if (!mode) digitalWrite(CPUSLC, LOW);
+void resetCPUs() {            	/** Self-explanatory **/
+  	digitalWrite(CPURST, LOW);
+  	digitalWrite(CPUSLC, LOW);  /** First reset the 6502 **/
+  	digitalWrite(CPUGO, HIGH);
+  	delay(50);
+  	digitalWrite(CPURST, HIGH);
+  	digitalWrite(CPUGO, LOW);
+  	delay(50);
+  	digitalWrite(CPURST, LOW);
+  	digitalWrite(CPUSLC, HIGH); /** Now reset the Z80 **/
+  	digitalWrite(CPUGO, HIGH);
+  	delay(50);
+  	digitalWrite(CPURST, HIGH);
+  	digitalWrite(CPUGO, LOW);
+  	delay(50);
+  	digitalWrite(CPURST, LOW);
+  	if (!mode) {
+		  digitalWrite(CPUSLC, LOW);
+	}
 }
 
 byte readShiftRegister() {
-  byte data;
-  data = shiftIn(SI, SC, MSBFIRST);
-  return data;
+  	byte data;
+  	data = shiftIn(SI, SC, MSBFIRST);
+  	return data;
 }
 
 void setShiftRegister(unsigned int address, byte data) { 
-  shiftOut(SO, SC, LSBFIRST, address);      /** First 8 bits of address **/
-  shiftOut(SO, SC, LSBFIRST, address >> 8); /** Then the remaining 8 bits **/
-  shiftOut(SO, SC, LSBFIRST, data);         /** Finally, a byte of data **/
+  	shiftOut(SO, SC, LSBFIRST, address);      /** First 8 bits of address **/
+  	shiftOut(SO, SC, LSBFIRST, address >> 8); /** Then the remaining 8 bits **/
+  	shiftOut(SO, SC, LSBFIRST, data);         /** Finally, a byte of data **/
 }
 
 void cpoke(unsigned int address, byte data) {
-  setShiftRegister(address, data);
-  digitalWrite(AOE, HIGH);      /** Enable address onto bus **/
-  digitalWrite(RW, LOW);        /** Begin writing **/
-  digitalWrite(RW, HIGH);       /** Finish up**/
-  digitalWrite(AOE, LOW);
+  	setShiftRegister(address, data);
+  	digitalWrite(AOE, HIGH);      /** Enable address onto bus **/
+  	digitalWrite(RW, LOW);        /** Begin writing **/
+  	digitalWrite(RW, HIGH);       /** Finish up**/
+  	digitalWrite(AOE, LOW);
 }
 
 byte cpeek(unsigned int address) {
-  byte data = 0;
-  setShiftRegister(address, data);
-  digitalWrite(AOE, HIGH);      /** Enable address onto us **/
-  /** This time we do NOT enable the data outputs of the shift register, as we are reading **/
-  digitalWrite(LD, HIGH);       /** Prepare to latch byte from data bus into shift register **/
-  digitalWrite(SC, HIGH);       /** Now the clock tics, so the byte is actually latched **/
-  digitalWrite(LD, LOW);
-  digitalWrite(AOE, LOW);
-  data = readShiftRegister();
-  return data;
+  	byte data = 0;
+  	setShiftRegister(address, data);
+  	digitalWrite(AOE, HIGH);      /** Enable address onto us **/
+  	/** This time we do NOT enable the data outputs of the shift register, as we are reading **/
+  	digitalWrite(LD, HIGH);       /** Prepare to latch byte from data bus into shift register **/
+  	digitalWrite(SC, HIGH);       /** Now the clock tics, so the byte is actually latched **/
+  	digitalWrite(LD, LOW);
+  	digitalWrite(AOE, LOW);
+  	data = readShiftRegister();
+  	return data;
 }
 
 unsigned int cpeekW(unsigned int address) {
