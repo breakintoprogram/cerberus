@@ -118,11 +118,11 @@ Implemented as OSBYTE
 
 - `*FX 19`: Wait for an NMI interrupt
 
-### LOAD filename start length
+### LOAD filename address
 
 Load a file into memory
 
-### SAVE filename start length
+### SAVE filename address length
 
 Save a block of memory as a file
 
