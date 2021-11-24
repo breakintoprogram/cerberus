@@ -2,10 +2,11 @@
 ; Title:	BBC Basic for Cerberus 2080 - Editor
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	10/08/2021
+; Last Updated:	24/11/2021
 ;
 ; Modinfo:
 ; 10/08/2021:	Added cursor support and fixed editor keycodes
+; 24/11/2021:	TAB is now COPY key
 
 			MODULE EDITOR
 
@@ -50,6 +51,8 @@ Edit_Line_Loop:		CALL	CERBERUS_CURSOR.Show
 			JP	Z, Key_VT
 			CP	0x0D			; CR Enter
 			JR	Z, Key_CR
+			CP	0x09			; TAB Copy
+			JP	Z, Key_TAB
 ;
 			LD	A, C			; Is it a printable character? 
 			CP	32
@@ -152,9 +155,7 @@ Key_VT:			BIT	4, B			; Are we in COPY mode?
 
 ; Delete
 ;
-Key_DEL:		BIT	4, B			; Are we in COPY mode?
-			JR	NZ, 2F			; Yes, so do copy
-			INC	L			; Check for input ptr at beginning of line
+Key_DEL:		INC	L			; Check for input ptr at beginning of line
 			DEC	L 
 			JR	Z, 1F
 			CALL	Delete
@@ -166,6 +167,12 @@ Key_DEL:		BIT	4, B			; Are we in COPY mode?
 			CALL	Update_2
 			LD	DE, (CHARPOS_X)		; Update the cursor position
 			CALL	CERBERUS_CURSOR.Move
+			JP	Edit_Line_Loop
+
+; Copy
+;
+Key_TAB:		BIT	4, B 			; Are we in COPY mode?
+			JR	NZ, 2F			; Yes, so do COPY
 1:			JP	Edit_Line_Loop
 ;
 2:			PUSH	DE
@@ -180,6 +187,7 @@ Key_DEL:		BIT	4, B			; Are we in COPY mode?
 			PUSH	HL
 			EX	DE, HL 
 			CALL	CERBERUS_GRAPHICS.Get_Char
+			LD	C, A			; Store character in C
 			POP	HL
 			POP	DE
 			JR	NC, 1B
