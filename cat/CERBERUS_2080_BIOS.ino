@@ -18,27 +18,29 @@
 
 /** Updated By:		Dean Belfield	**/
 /** Created:		31/07/2021		**/
-/** Last Updated:	21/08/2021 		**/
+/** Last Updated:	23/11/2021 		**/
 
 //	Modinfo:
 //	10/08/2021:	All recognised keystrokes sent to mailbox, F12 now returns to BIOS, 50hz NMI starts when code runs
 //	11/08/2021:	Memory map now defined in configs, moved code start to 0x0205 to accomodate inbox
 //	12/08/2021:	Refactored load, save and delFile. Now handles incoming messages from Z80/6502
 //	21/08/2021:	Tweaks for sound command, bug fixes in incoming message handler
+//  06/10/2021: Tweaks for cat command
+//	23/11/2021:	Moved PS2Keyboard library from Arduino library to src subdirectory
+
+/** These libraries are built into the arduino IDE  **/
 
 #include <SPI.h>
 #include <SD.h>
-/** The two libraries above are built into the arduino IDE  **/
-#include <PS2Keyboard.h>
+#include <TimerOne.h>
 
-/** The library above must be manually included in the IDE. **/
 /** For more information about this PS2Keyboard library:    **/
 /** http://www.arduino.cc/playground/Main/PS2Keyboard       **/
 /** http://www.pjrc.com/teensy/td_libs_PS2Keyboard.html     **/
 /** Note that the Arduino managed library is not the latest **/
 /** Install from the GitHub project in order to build       **/
 
-#include <TimerOne.h>
+#include "src/PS2Keyboard/PS2Keyboard.h"
 
 /** Compilation defaults **/
 #define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
@@ -92,6 +94,7 @@ const int IRQpin = KCLK;
 #define STATUS_FILE_EXISTS 8
 #define STATUS_ADDRESS_ERROR 9
 #define STATUS_POWER 10
+#define STATUS_EOF 11
 
 /** Next is the string in CAT's internal memory containing the edit line, **/
 /** intialized in startup.                              **/
@@ -104,6 +107,7 @@ volatile bool mode = config_default_cpu;	/** false = 6502 mode, true = Z80 mode*
 volatile bool cpurunning = false;			/** true = CPU is running, CAT should not use the buses **/
 volatile bool interruptFlag = false;		/** true = Triggered by interrupt **/
 volatile bool fast = config_default_speed;	/** true = 8 MHz CPU clock, false = 4 MHz CPU clock **/
+volatile File cd;							/** Used by BASIC directory commands **/
 
 void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **/
 
@@ -322,6 +326,18 @@ void messageHandler(void) {
 						retVal = (byte)(status + 0x80);
 					}
 					break;
+				case 0x05:
+					status = cmdCatOpen(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
+				case 0x06:
+					status = cmdCatEntry(address);
+					if(status != STATUS_READY) {
+						retVal = (byte)(status + 0x80);
+					}
+					break;
 				case 0x7F:
 					resetFunc();
 					break;
@@ -365,6 +381,26 @@ int cmdSave(unsigned int address) {
 	unsigned int length = cpeekW(address + 2);
 	cpeekStr(address + 4, editLine, 38);
 	return save((char *)editLine, startAddr, startAddr + length - 1);
+}
+
+// Handle CAT command from BASIC
+//
+int cmdCatOpen(unsigned int address) {
+	cd = SD.open("/");						// Start the process first by opening the directory
+	return STATUS_READY;
+}
+
+int cmdCatEntry(unsigned int address) {		// Subsequent calls to this will read the directory entries
+	File entry;
+	entry = cd.openNextFile();				// Open the next file
+	if(!entry) {							// If we've read past the last file in the directory
+		cd.close();							// Then close the directory
+		return STATUS_EOF;					// And return end of file
+	}
+	cpokeL(address, entry.size());			// First four bytes are the length
+	cpokeStr(address + 4, entry.name());	// Followed by the filename, zero terminated
+	entry.close();							// Close the directory entry
+	return STATUS_READY;					// Return READY
 }
 
 /************************************************************************************************/
@@ -606,9 +642,11 @@ void runCode() {
     cpoke(0x0067, 0x45);
     /** The Z80 fetches the first instruction from 0x0000, so put a jump to the code area there **/
     // 0000   C3 ll hh               JP   config_code_start
+	#if config_code_start != 0x0000
     cpoke(0x0000, 0xC3);
     cpoke(0x0001, runL);
     cpoke(0x0002, runH);
+	#endif
   }
   cpurunning = true;
   digitalWrite(CPURST, HIGH); /** Reset the CPU **/
@@ -994,6 +1032,27 @@ void cpoke(unsigned int address, byte data) {
   	digitalWrite(AOE, LOW);
 }
 
+void cpokeW(unsigned int address, unsigned int data) {
+	cpoke(address, data & 0xFF);
+	cpoke(address + 1, (data >> 8) & 0xFF);
+}
+
+void cpokeL(unsigned int address, unsigned long data) {
+	cpoke(address, data & 0xFF);
+	cpoke(address + 1, (data >> 8) & 0xFF);
+	cpoke(address + 2, (data >> 16) & 0xFF);
+	cpoke(address + 3, (data >> 24) & 0xFF);
+}
+
+boolean cpokeStr(unsigned int address, String text) {
+	unsigned int i;
+	for(i = 0; i < text.length(); i++) {
+		cpoke(address + i, text[i]);
+	}
+	cpoke(address + i, 0);
+	return true;
+}
+
 byte cpeek(unsigned int address) {
   	byte data = 0;
   	setShiftRegister(address, data);
@@ -1012,7 +1071,7 @@ unsigned int cpeekW(unsigned int address) {
 }
 
 boolean cpeekStr(unsigned int address, byte * dest, int max) {
-	int i;
+	unsigned int i;
 	byte c;
 	for(i = 0; i < max; i++) {
 		c = cpeek(address + i);
