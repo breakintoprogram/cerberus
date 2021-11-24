@@ -3,10 +3,11 @@
 ;		Cerberus 2080 I/O Routines
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	11/08/2021
+; Last Updated:	23/11/2021
 ;
 ; Modinfo:
 ; 11/08/2021:	Changed label of Mailbox to Inbox
+; 23/11/2021:	Insert key now toggles COPY mode in FLAGS
 
 			MODULE	CERBERUS_IO
 
@@ -20,6 +21,13 @@ Read_Keyboard:		LD	A, (Inbox_Flag)
 			XOR	A 
 			LD	(Inbox_Flag), A
 			LD	A, (Inbox_Data)
+			CP	2			; Key code for INSERT
+			RET	NZ
+			PUSH	AF
+			LD	A, (FLAGS)
+			XOR	%00010000
+			LD	(FLAGS), A 
+			POP	AF
 			RET
 
 ; Get charpos
