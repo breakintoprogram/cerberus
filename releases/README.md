@@ -7,6 +7,11 @@ Note that this version currently requires the custom CAT code to be installed on
 
 You will need to rename the file to an 8.3 filename with no special characters to make it easier to load from the Cerberus BIOS screen, i.e. `bbcbasic.bin`
 
+##### 20211124: Version 0.04
+
+- Added CAT (*.) command
+- Tweaks to BIOS to improve stability
+
 ##### 20210821: Version 0.03
 
 - Mainly tweaks bug fixes to ATMega328p BIOS code
