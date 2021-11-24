@@ -2,11 +2,12 @@
 ; Title:	BBC Basic for Cerberus 2080
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	13/08/2021
+; Last Updated:	06/10/2021
 ;
 ; Modinfo:
 ; 12/08/2021:	Added POINT, GCOL, LOAD and SAVE and STAR commands BYE, MEMDUMP, FX, ERASE, DELETE
 ; 13/08/2021:	Added STAR commands LOAD and SAVE
+; 06/10/2021:	Added STAR command CAT
 			
 			MODULE PATCH
 
@@ -32,16 +33,16 @@
 
 ; PUTCSR: move to cursor to x=DE, y=HL
 ;
-@PUTCSR:		LD	D, L			; E: X, D: Y
+@PUTCSR:		LD	D, L				; E: X, D: Y
 			LD	(CHARPOS_X), DE
 			RET
 
 ; GETCSR: return cursor position in x=DE, y=HL
 ;
-@GETCSR:		LD	DE, (CHARPOS_X)		; E: X, D: Y
+@GETCSR:		LD	DE, (CHARPOS_X)			; E: X, D: Y
 			LD	L, D 					
-			LD	H, 0			; HL: Y
-			LD	D, H 			; DE: X
+			LD	H, 0				; HL: Y
+			LD	D, H 				; DE: X
 			RET
 
 ; Read character from keyboard (blocking)
@@ -68,29 +69,29 @@
 ;           If carry set A = character
 ; Destroys: A,H,L,F
 ;
-@OSKEY: 		LD	A, (KEY_CODE)	; Read keyboard
-			OR	A		; If we have a character
-			JR	NZ, 1F		; Then process it
-			LD	A,H		; Check if HL is 0 (this is passed by INKEY() function
+@OSKEY: 		LD	A, (KEY_CODE)		; Read keyboard
+			OR	A			; If we have a character
+			JR	NZ, 1F			; Then process it
+			LD	A,H			; Check if HL is 0 (this is passed by INKEY() function
 			OR	L
-			RET	Z 		; If it is then ret
-			HALT			; Bit of a bodge so this is timed in ms
-			DEC	HL 		; Decrement the counter and 
-			JR	@OSKEY 		; loop
-1:			CP	0x1B		; If we are not pressing ESC, 
-			SCF 			; then flag we've got a character
+			RET	Z 			; If it is then ret
+			HALT				; Bit of a bodge so this is timed in ms
+			DEC	HL 			; Decrement the counter and 
+			JR	@OSKEY 			; loop
+1:			CP	0x1B			; If we are not pressing ESC, 
+			SCF 				; then flag we've got a character
 			RET	NZ		
 ;
 ESCSET: 		PUSH    HL
         		LD      HL,FLAGS
-        		BIT     6,(HL)          ; ESC DISABLED?
+        		BIT     6,(HL)          	; ESC DISABLED?
         		JR      NZ,ESCDIS
-        		SET     7,(HL)          ; SET ESCAPE FLAG
+        		SET     7,(HL)         		; SET ESCAPE FLAG
 ESCDIS: 		POP     HL
         		RET	
 ;
 ESCTEST:		LD	A, (KEY_CODE)
-			CP	0x1B		; ESC	
+			CP	0x1B			; ESC	
 			JR	Z,ESCSET
 			RET
 ;
@@ -113,7 +114,7 @@ ESCTEST:		LD	A, (KEY_CODE)
 @OSINIT:		LD 	HL, @USER
 			LD	DE, @RAM_Top
 			XOR	A
-			LD	(@FLAGS), A			; Clear flags and set F = Z
+			LD	(@FLAGS), A		; Clear flags and set F = Z
          		RET	
 
 ;
@@ -125,7 +126,7 @@ ESCTEST:		LD	A, (KEY_CODE)
 			CP      '|'
 			RET     Z
 			CP      '.'
-			JP      Z,STAR_DOT	; *.
+			JP      Z,STAR_DOT		; *.
 			EX      DE,HL
 			LD      HL,COMDS
 OSCLI0:			LD      A,(DE)
@@ -145,7 +146,7 @@ OSCLI3:			INC     DE
 			INC     HL
 			LD      A,(DE)
 			CALL    UPPRC
-			CP      '.'		; ABBREVIATED?
+			CP      '.'			; ABBREVIATED?
 			JR      Z,OSCLI4
 			XOR     (HL)
 			JR      Z,OSCLI3
@@ -181,7 +182,7 @@ SKIPSP:			LD      A,(HL)
 UPPRC:  		AND     7FH
 			CP      '`'
 			RET     C
-			AND     5FH		; CONVERT TO UPPER CASE
+			AND     5FH			; CONVERT TO UPPER CASE
 			RET					
 
 ; Each command has bit 7 of the last character set, and is followed by the address of the handler
@@ -207,7 +208,35 @@ STAR_BYE:		LD 	A, 0x7F
 ; *CAT / *.
 ;
 STAR_DOT:
-STAR_CAT:		RET 
+STAR_CAT:		CALL	CERBERUS_DOS.Dir 	; Open the "/" directory
+1:			CALL	CERBERUS_DOS.Dir_Entry 	; Fetch the next entry
+			RET	NZ 			; If the CAT has returned EOF, then exit
+
+			LD	HL, DOS_BUFFER + 4	; Skip to the filename
+			CALL	MAIN.TEXT		; Output
+
+			LD	HL, DOS_BUFFER		; Point to the file size
+			LD	E, (HL): INC L		; Byte 0 of the file length
+			LD	D, (HL): INC L		; Byte 1
+			LD	A, (HL): INC L		; Byte 2 
+			LD	H, (HL)			; Byte 3  
+			LD	L, A 
+			CALL	HLDE_TO_FPP		; Convert to HLH'L' and C
+			LD	DE, ACCS		; Buffer to output the ASCII number to
+			LD	IX, STAVAR		; Used for the @% format variable
+			CALL	FPP.STR			; Output to DE
+			EX	DE, HL 
+			LD	(HL), 0			; Null terminate the string
+			LD	A, 7			; Right-align it
+			SUB	L
+			JR	C, 2F 
+			ADD	A, 11
+			LD	(CHARPOS_X), A
+			LD	L, 0
+			CALL	MAIN.TEXT		; And print it
+
+2:			CALL	CRLF 			; With a carriage return
+			JR	1B 			; Loop back to fetch next entry
 
 ; *DELETE filename
 ;
@@ -216,33 +245,33 @@ STAR_DELETE:		CALL	SKIPSP
 			
 ; *MEMDUMP addr count
 ; 
-STAR_MEMDUMP		CALL	ASC_TO_NUMBER	; Get start address
+STAR_MEMDUMP		CALL	ASC_TO_NUMBER		; Get start address
 			PUSH	DE 
-			CALL	ASC_TO_NUMBER	; Get length in DE
-			POP	HL 		; Get start address in HL
+			CALL	ASC_TO_NUMBER		; Get length in DE
+			POP	HL 			; Get start address in HL
 			JP	CERBERUS_DEBUG.Memory_Dump
 
 ; *LOAD file addr
 ;
-STAR_LOAD:		CALL	SKIPSP		; First parameter is a string
-			PUSH	HL		; Stack the string pointer
-			CALL	SKIPNOTSP	; Skip to the next parameter
-			CALL	ASC_TO_NUMBER	; DE: Address
-			POP	HL		; HL: Pointer to Filename
-			LD	BC, -1		; Maximum number of bytes
+STAR_LOAD:		CALL	SKIPSP			; First parameter is a string
+			PUSH	HL			; Stack the string pointer
+			CALL	SKIPNOTSP		; Skip to the next parameter
+			CALL	ASC_TO_NUMBER		; DE: Address
+			POP	HL			; HL: Pointer to Filename
+			LD	BC, -1			; Maximum number of bytes
 			JP	CERBERUS_DOS.Load 
 
 ; *SAVE file addr len
 ;
-STAR_SAVE:		CALL	SKIPSP		; First parameter is a string
-			PUSH	HL		; Stack the string pointer
-			CALL	SKIPNOTSP	; Skip to the next parameter
-			CALL	ASC_TO_NUMBER	; Read address
+STAR_SAVE:		CALL	SKIPSP			; First parameter is a string
+			PUSH	HL			; Stack the string pointer
+			CALL	SKIPNOTSP		; Skip to the next parameter
+			CALL	ASC_TO_NUMBER		; Read address
 			PUSH	DE 
-			CALL	ASC_TO_NUMBER	; Read length
-			EXREG	DE, BC		; BC: Length
-			POP	DE 		; DE: Start address
-			POP	HL		; HL: Pointer to Filename
+			CALL	ASC_TO_NUMBER		; Read length
+			EXREG	DE, BC			; BC: Length
+			POP	DE 			; DE: Start address
+			POP	HL			; HL: Pointer to Filename
 			JP	CERBERUS_DOS.Save 
 			
 ; *TEST 
@@ -251,14 +280,14 @@ STAR_TEST		RET
 
 ; *FX
 ;
-STAR_FX:		CALL	ASC_TO_NUMBER	; C: FX #
+STAR_FX:		CALL	ASC_TO_NUMBER		; C: FX #
 			LD	C, E
-			CALL	ASC_TO_NUMBER	; B: First parameter
+			CALL	ASC_TO_NUMBER		; B: First parameter
 			LD	B, E
-			CALL	ASC_TO_NUMBER	; E: Second parameter
-			LD	L, B 		; L: First parameter
-			LD	H, E 		; H: Second parameter
-			LD	A, C 		; A: FX #, and fall through to OSBYTE
+			CALL	ASC_TO_NUMBER		; E: Second parameter
+			LD	L, B 			; L: First parameter
+			LD	H, E 			; H: Second parameter
+			LD	A, C 			; A: FX #, and fall through to OSBYTE
 ;
 ; OSBYTE
 ;  A: FX #
@@ -279,8 +308,8 @@ OSBYTE_13:		HALT
 ; GET(x, y) - Read character from screen position (x, y)
 ; Called from GET in eval.z80
 ;
-@GET_PORT:		INC	IY		; Skip '('
-			CALL    EXPRI           ; PORT ADDRESS
+@GET_PORT:		INC	IY			; Skip '('
+			CALL    EXPRI         	  	; PORT ADDRESS
 			EXX
 			PUSH	HL 
 			CALL	NXT
@@ -292,34 +321,34 @@ OSBYTE_13:		HALT
 			CALL	COMMA		
 			CALL	EXPRI
 			EXX 
-			POP	DE 		; DE: X coordinate 
-			LD	H, L		; H: Y coordinate
-			LD	L, E		; L: X coordinate
+			POP	DE 			; DE: X coordinate 
+			LD	H, L			; H: Y coordinate
+			LD	L, E			; L: X coordinate
 			CALL	CERBERUS_GRAPHICS.Get_Char
-			LD	L, A		; Character code, or 0xFF if no match
-			JR	C, 3F		; We have a character
-			CALL	BRAKET		; Check for second bracket
-			JP	EVAL.TRUE	; Return -1
+			LD	L, A			; Character code, or 0xFF if no match
+			JR	C, 3F			; We have a character
+			CALL	BRAKET			; Check for second bracket
+			JP	EVAL.TRUE		; Return -1
 ;
 ; Read port
 ;
-1:			POP	BC 		; Port # in BC
-			IN	L, (C)		; Read the value
+1:			POP	BC 			; Port # in BC
+			IN	L, (C)			; Read the value
 3:			CALL	BRAKET
 			JP	EVAL.COUNT0
 
 ; GET$(x, y) - Read character from screen position (x, y)
 ;
 @GET_CHAR:		INC	IY
-			CALL    EXPRI           ;Get X coordinate
+			CALL    EXPRI          		; Get X coordinate
 			EXX
 			PUSH	HL 		
 			CALL	COMMA		
-			CALL	EXPRI		;Get Y coordinate
+			CALL	EXPRI			; Get Y coordinate
 			EXX 
-			POP	DE 		;DE: X coordinate 
-			LD	H, L		;H: Y coordinate
-			LD	L, E		;L: X coordinate
+			POP	DE 			; DE: X coordinate 
+			LD	H, L			;  H: Y coordinate
+			LD	L, E			;  L: X coordinate
 			CALL	CERBERUS_GRAPHICS.Get_Char
 			EX	AF, AF
 			CALL	BRAKET
@@ -328,7 +357,7 @@ OSBYTE_13:		HALT
 
 ; GCOL mode,colour
 ;
-@GCOL:			CALL	EXPR_P2		; DE: mode, HL: colour
+@GCOL:			CALL	EXPR_P2			; DE: mode, HL: colour
 			LD	A, E 
 			LD	(PLOT_MODE), A 
 			LD	A, L 
@@ -337,45 +366,45 @@ OSBYTE_13:		HALT
 
 ; MOVE x, y
 ;
-@MOVE:			CALL	EXPR_P2		; DE: X, HL: Y
-			LD	H, L		; H: Y 
-			LD	L, E		; L: X
+@MOVE:			CALL	EXPR_P2			; DE: X, HL: Y
+			LD	H, L			; H: Y 
+			LD	L, E			; L: X
 			CALL	MOVE_1
 			JP	XEQ 
 ;
-@MOVE_1:		LD	DE, (PLOTPOS_X)	; Store the previous plot points
+@MOVE_1:		LD	DE, (PLOTPOS_X)		; Store the previous plot points
 			LD 	(PLOTPRE_X), DE 
-			LD	(PLOTPOS_X), HL	; And store the latest plot point
+			LD	(PLOTPOS_X), HL		; And store the latest plot point
 			RET
 ; DRAW x, y
 ;
-@DRAW:			CALL	EXPR_P2		; DE: X, HL: Y
-			LD	H, L		; H: Y 
-			LD	L, E		; L: X
-			CALL	NXT 		; Are there any more paramters?
+@DRAW:			CALL	EXPR_P2			; DE: X, HL: Y
+			LD	H, L			; H: Y 
+			LD	L, E			; L: X
+			CALL	NXT 			; Are there any more paramters?
 			CP	","		
-			JR	NZ, 1F		; No, so just do 'DRAW x, y'
-			CALL	COMMA		; Okay, we're now doing 'DRAW x1,y1,x2,y2
-			CALL	MOVE_1		; MOVE x1, y1 (E, L)
-			CALL	EXPR_P2		; DE: X2, HL: Y2
+			JR	NZ, 1F			; No, so just do 'DRAW x, y'
+			CALL	COMMA			; Okay, we're now doing 'DRAW x1,y1,x2,y2
+			CALL	MOVE_1			; MOVE x1, y1 (E, L)
+			CALL	EXPR_P2			; DE: X2, HL: Y2
 			LD	H, L 
 			LD	L, E 
-1:			PUSH	HL 		; Stack X2
+1:			PUSH	HL 			; Stack X2
 			CALL	CERBERUS_GRAPHICS.Plot_Line 
 			JR	PLOT_1	
 
 
 ; PLOT mode,x,y
 ;
-@PLOT:			CALL	EXPRI		; Get the plot type (line, plot, etc)
+@PLOT:			CALL	EXPRI			; Get the plot type (line, plot, etc)
 			EXX
 			PUSH	HL	
 			CALL	COMMA 
-			CALL	EXPR_P2		; DE: X, HL: Y
-			POP	BC		; Plot type in C
-			LD	A, C 		; Plot type in A
-			LD	H, L		; H: Y
-			LD	L, E 		; L: X
+			CALL	EXPR_P2			; DE: X, HL: Y
+			POP	BC			; Plot type in C
+			LD	A, C 			; Plot type in A
+			LD	H, L			; H: Y
+			LD	L, E 			; L: X
 			PUSH	HL		 
 			CALL	CERBERUS_GRAPHICS.Plot
 @PLOT_1:		POP	HL	
@@ -384,9 +413,9 @@ OSBYTE_13:		HALT
 
 ; POINT(x, y)
 ;
-@POINT:			CALL	EXPR_P2		; DE: X, HL: Y
-			LD	H, L		; H: Y
-			LD	L, E 		; L: X
+@POINT:			CALL	EXPR_P2			; DE: X, HL: Y
+			LD	H, L			; H: Y
+			LD	L, E 			; L: X
 			CALL	CERBERUS_GRAPHICS.Point
 			LD	L, A
 1:			CALL	BRAKET
@@ -414,9 +443,9 @@ OSBYTE_13:		HALT
 ; pitch: 0 - 255
 ; duration: -1 to 254 (duration in 20ths of a second, -1 = play forever)
 ;
-@SOUND:			CALL	EXPR_P2		; DE: Channel/Control, HL: Volume - ignored
+@SOUND:			CALL	EXPR_P2			; DE: Channel/Control, HL: Volume - ignored
 			CALL	COMMA
-			CALL	EXPR_P2		; DE: Pitch, HL: Duration
+			CALL	EXPR_P2			; DE: Pitch, HL: Duration
 			LD	B, H
 			LD	C, L 
 			LD	A, E 
@@ -429,11 +458,11 @@ OSBYTE_13:		HALT
 ; DE: P1
 ; HL: P2
 ;
-@EXPR_P2:		CALL	EXPRI		; Get first parameter	
+@EXPR_P2:		CALL	EXPRI			; Get first parameter	
 			EXX
 			PUSH	HL
 			CALL	COMMA 
-			CALL	EXPRI		; Get second parameter
+			CALL	EXPRI			; Get second parameter
 			EXX
 			POP	DE
 			RET
