@@ -6,6 +6,8 @@ In addition to the core BBC Basic for Z80 core language (details of which [can b
 
 A line editor is provided, that allows the user to enter a line of code up to 255 characters long. A cursor can be moved around this line, and text can be deleted or inserted at the current character position.
 
+Pressing INS on a PS/2 keyboard will change the editor mode to COPY. In this mode, the cursor can be moved around the screen using the keyboard cursor keys. Pressing TAB will copy the character under the cursor to the last position in the line editor before COPY mode was invoked. Pressing INS or Enter will exit COPY mode.
+
 ## BASIC
 
 The following statements differ from the BBC Basic standard:
@@ -98,7 +100,7 @@ If you need to pass a parameter to a star command, call it using the OSCLI comma
 
 Exits BBC Basic by doing a soft reset (does not work on emulators)
 
-### DIR (*.)
+### CAT (*.)
 
 Directory listing of the root directory of the SD card
 
