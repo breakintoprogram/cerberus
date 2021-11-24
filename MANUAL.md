@@ -98,6 +98,10 @@ If you need to pass a parameter to a star command, call it using the OSCLI comma
 
 Exits BBC Basic by doing a soft reset (does not work on emulators)
 
+### DIR (*.)
+
+Directory listing of the root directory of the SD card
+
 ### ERASE
 
 Erase a file
