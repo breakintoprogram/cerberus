@@ -3,10 +3,11 @@
 ;		Cerberus 2080 File IO routines
 ; Author:	Dean Belfield
 ; Created:	12/08/2021
-; Last Updated:	13/08/2021
+; Last Updated:	06/10/2021
 ;
 ; Modinfo:
 ; 13/08/2021:	Tweaked error codes
+; 06/10/2021:	Added DIR command
 
 			MODULE	CERBERUS_DOS
 
@@ -38,6 +39,17 @@ Save:			LD	A, 3
 Delete:			LD 	A, 4
 			JP	CAT_FILECMD_1P
 
+; Directory list: Open
+;
+Dir:			LD	C, 5
+			JP	CAT_TX
+
+; Directory List: Get next entry
+;
+Dir_Entry:		LD	HL, DOS_BUFFER		; Address to store the directory entry in
+			LD	(Outbox_Data), HL
+			LD	C, 6
+			JP	CAT_TX
 
 ; Pass a file command to the CAT
 ; HL: Address of the filename
@@ -79,26 +91,28 @@ CAT_FILECMD:		LD	B, 60
 ;
 2:			LD	(IX + 0), 0		; Terminate the filename with \0
 			POP	IX 
-			LD	A, C 
+			CALL	CAT_TX 			; Send the command
+			JR	NZ, Error 
+			RET 
+
+; Send command to CAT
+;  C: Command #
+; Returns:
+;  F: Z if Outbox_Flag is 0, otherwise NZ
+;		
+CAT_TX:			LD	A, C 
 			LD	(Outbox_Flag), A 
-;
-; Wait for the flag status to change, i.e the CAT has finished the load operation
-;			
-3:			HALT
-			LD	A, (Outbox_Flag)	; Check the outbound flag
-			CP	C			; Has the CAT changed it from 2?
-			JR	Z, 3B			; No, so keep on waiting
-			OR	A			; Check for 0 = OK
-			JR	NZ, 4F 			; Error at this point
-			RET				; OK!
-;
-; Handle the error
-;
-4:			PUSH	AF
-			XOR	A 
-			LD	(Outbox_Flag), A 	; Clear the outbox flag to ack error
+1:			HALT 
+			LD	A, (Outbox_Flag)
+			CP	C 
+			JR	Z, 1B
+			OR	A 			; Check for error code
+			RET 	Z 			; Just return if no error		
+			PUSH	AF
+			XOR	A 			; Clear the outbox flag to ack error
+			LD	(Outbox_Flag), A 
 			POP	AF 
-			JR 	Error			
+			RET 	
 
 ; Lookup error codes
 ; A: Error code from CAT
