@@ -40,7 +40,9 @@
 /** Note that the Arduino managed library is not the latest **/
 /** Install from the GitHub project in order to build       **/
 
-#include "src/PS2Keyboard/PS2Keyboard.h"
+#include <PS2KeyAdvanced.h>
+#include <PS2KeyMap.h>
+
 
 /** Compilation defaults **/
 #define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
@@ -111,7 +113,8 @@ volatile File cd;							/** Used by BASIC directory commands **/
 
 void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **/
 
-PS2Keyboard keyboard;
+PS2KeyAdvanced keyboard;
+PS2KeyMap keymap;
 
 void setup() {
 	/** First, declaring all the pins **/
@@ -148,6 +151,10 @@ void setup() {
   	Serial.begin(9600);
 	/** Initialize keyboard library **/
   	keyboard.begin(DataPin, IRQpin);
+    keyboard.resetKey();          /** essential for modern USB/PS2 keyboards **/
+    keyboard.setNoBreak( 1 );
+    // and set no repeat on CTRL, ALT, SHIFT, GUI while outputting
+    keyboard.setNoRepeat( 1 );
   	/** Now access uSD card and load character definitions so we can put something on the screen **/
   	if (!SD.begin(chipSelect)) {
     	/** SD Card has either failed or is not present **/
@@ -199,87 +206,146 @@ void setup() {
   	cprintEditLine();
 }
 
-char readKey() {
-	char ascii = 0;
-	if(keyboard.available()) {
-		ascii = keyboard.read();
-    	tone(SOUND, 750, 5);            	/** Clicking sound for auditive feedback to key presses **/
-		#if config_dev_mode == 0        	
-  		if(!cpurunning) {
-			cprintStatus(STATUS_DEFAULT);	/** Update status bar **/	
-		}
-		#endif 
-	}
-	else if(Serial.available()) {
-		ascii = Serial.read();
-	}
-	return ascii;
+char cerberusKBMap(uint16_t code)
+{
+  char ascii = keymap.remapKey(code);
+
+  switch(code & 0xFF) // lower byte contains the KEY code, ignore status byte
+  {
+    // Transform these specific keys back to ascii code, regardless of keyboard layout
+    case PS2_KEY_UP_ARROW:
+      return 0x0B;
+    case PS2_KEY_DN_ARROW:
+      return 0x0A;
+    case PS2_KEY_R_ARROW:
+      return 0x15;
+    case PS2_KEY_L_ARROW:
+      return 0x08;
+    case PS2_KEY_INSERT:
+      return 0x02;
+    case PS2_KEY_PGUP:
+      return 0x19;
+    case PS2_KEY_PGDN:
+      return 0x1A;
+    case PS2_KEY_BS:
+    case PS2_KEY_BACK:
+      return 0x7F;
+    case PS2_KEY_F12:
+      return 0x01;
+    default:
+      break;
+  }
+  return ascii;
+}
+
+void processKeyAction(uint16_t code, char ascii)
+{
+  byte i;   /** Just a counter **/
+  
+  if(cpurunning)
+  {
+    if((code & 0xFF) == PS2_KEY_F12) stopCode();
+    else
+    {
+      if(ascii > 0)
+      {
+        cpurunning = false;           /** Just stops interrupts from happening **/
+        digitalWrite(CPUGO, LOW);         /** Pause the CPU and tristate its buses to high-Z **/
+        byte mode = cpeek(config_outbox_flag);
+        cpoke(config_outbox_data, ascii);       /** Put token code of pressed key in the CPU's mailbox, at config_outbox_data **/
+        cpoke(config_outbox_flag, 0x01);    /** Flag that there is new mail for the CPU waiting at the mailbox **/
+        digitalWrite(CPUGO, HIGH);        /** Let the CPU go **/
+        cpurunning = true;
+        #if config_enable_nmi == 0
+        digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
+        digitalWrite(CPUIRQ, LOW);
+        #endif          
+      }
+    }
+  }
+  else
+  {
+    switch(code & 0xFF)
+    {
+      case PS2_KEY_ENTER:
+        enter();
+        break;
+      case PS2_KEY_UP_ARROW:
+        for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
+        i = 0;
+        while (editLine[i] != 0) i++;
+        pos = i;
+        cprintEditLine();
+        break;
+      case PS2_KEY_DN_ARROW:
+        clearEditLine();
+        break;
+      case PS2_KEY_BS:
+      case PS2_KEY_DELETE:
+      case PS2_KEY_L_ARROW:
+        editLine[pos] = 32; /** Put an empty space in current cursor position **/
+        if (pos > 1) pos--; /** Update cursor position, unless reached left-most position already **/
+        editLine[pos] = 0;  /** Put cursor on updated position **/
+        cprintEditLine();   /** Print the updated edit line **/
+        break;
+      case PS2_KEY_R_ARROW: /** ignore these codes in BIOS mode**/
+      case PS2_KEY_ESC:
+      case PS2_KEY_F12:
+      case PS2_KEY_TAB:
+      case PS2_KEY_INSERT:
+      case PS2_KEY_PGUP:
+      case PS2_KEY_PGDN:
+        break;
+      default:
+        if(ascii > 0)
+        {
+          if(ascii == 0x0d) enter();  // enter by serial ascii, no special control character
+          else
+          {
+            editLine[pos] = ascii;  /** Put new character in current cursor position **/
+            if (pos < 37) pos++;    /** Update cursor position **/
+            editLine[pos] = 0;      /** Place cursor to the right of new character **/
+            #if config_dev_mode == 0          
+              cprintEditLine();       /** Print the updated edit line **/
+            #endif
+          }
+        }
+        break;        
+     }   
+  }
+  if(interruptFlag) {           /** If the interrupt flag is set then **/
+    interruptFlag = false;
+    messageHandler();         /** Run the inbox message handler **/
+  }  
 }
 
 // The main loop
 //
 void loop() {
-	char ascii = readKey();	/** Stores ascii value of key pressed **/
-	byte i;     			/** Just a counter **/
+  uint16_t code = 0;
+  char ascii;
 
-  	/** Wait for a key to be pressed, then take it from there... **/
-	if(ascii > 0) {
-    	if(cpurunning) {
-    		if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
-	    		stopCode();
-    		}
-    		else {
-				cpurunning = false;						/** Just stops interrupts from happening **/
-        		digitalWrite(CPUGO, LOW);   			/** Pause the CPU and tristate its buses to high-Z **/
-      			byte mode = cpeek(config_outbox_flag);
-      			cpoke(config_outbox_data, ascii);       /** Put token code of pressed key in the CPU's mailbox, at config_outbox_data **/
-	         	cpoke(config_outbox_flag, 0x01);		/** Flag that there is new mail for the CPU waiting at the mailbox **/
-      			digitalWrite(CPUGO, HIGH);  			/** Let the CPU go **/
-				cpurunning = true;
-      			#if config_enable_nmi == 0
-      			digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
-      			digitalWrite(CPUIRQ, LOW);
-      			#endif
-    		}
-    	}
-    	else {
-	 	   switch(ascii) {
-	    		case PS2_ENTER:
-		    		enter();
-	    			break;
-	    		case PS2_UPARROW:
-		     	   	for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
-	        		i = 0;
-        			while (editLine[i] != 0) i++;
-        			pos = i;
-        			cprintEditLine();
-        			break;
-        		case PS2_DOWNARROW:
-		        	clearEditLine();
-        			break;
-        		case PS2_DELETE:
-        		case PS2_LEFTARROW:
-			        editLine[pos] = 32; /** Put an empty space in current cursor position **/
-        			if (pos > 1) pos--; /** Update cursor position, unless reached left-most position already **/
-        			editLine[pos] = 0;  /** Put cursor on updated position **/
-        			cprintEditLine();   /** Print the updated edit line **/
-        			break;
-        		default:
-		        	editLine[pos] = ascii;  /** Put new character in current cursor position **/
-        			if (pos < 37) pos++;    /** Update cursor position **/
-        			editLine[pos] = 0;      /** Place cursor to the right of new character **/
-    				#if config_dev_mode == 0        	
-		       		cprintEditLine();       /** Print the updated edit line **/
-	       			#endif
-        			break;        
-			}
-		}    
-	}
-	if(interruptFlag) {						/** If the interrupt flag is set then **/
-		interruptFlag = false;
-		messageHandler();					/** Run the inbox message handler **/
-	}
+  if(keyboard.available())
+  {
+    code = keyboard.read();
+    ascii = cerberusKBMap(code);
+    if((ascii > 0x1a) && (ascii < 0xa8))
+    {
+      tone(SOUND, 750, 5);              /** Clicking sound for auditive feedback to key presses **/
+    }
+    #if config_dev_mode == 0          
+    if(!cpurunning) {
+      cprintStatus(STATUS_DEFAULT); /** Update status bar **/ 
+    }
+    #endif        
+    processKeyAction(code, ascii); 
+  }
+  else if(Serial.available()) {
+    ascii = Serial.read();
+    processKeyAction(code, ascii);
+  }
 }
+
 
 // CPU Interrupt Routine (50hz)
 //
@@ -697,7 +763,7 @@ void dir() {
       cprintStatus(STATUS_SCROLL_PROMPT);            /** End of screen has been reached, needs to scrow down **/
       for (x = 2; x < 40; x++) cprintChar(x, 29, ' '); /** Hide editline while waiting for key press **/
       while (!keyboard.available());/** Wait for a key to be pressed **/
-      if (keyboard.read() == PS2_ESC) { /** If the user pressed ESC, break and exit **/
+      if ((keyboard.read() & 0xFF) == PS2_KEY_ESC) { /** If the user pressed ESC, break and exit **/
         tone(SOUND, 750, 5);      /** Clicking sound for auditive feedback to key press **/
         root.close();             /** Close the directory before exiting **/
         cprintStatus(STATUS_READY);
