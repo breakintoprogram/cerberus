@@ -42,6 +42,7 @@
 #define PS2_BACKSPACE		127
 #define PS2_ESC				27
 #define PS2_INSERT			2	// Modified for Cerberus BIOS
+#define PS_CAPS				3	// Modified for Cerberus BIOS
 #define PS2_DELETE			127
 #define PS2_HOME			0
 #define PS2_END				0
@@ -162,8 +163,13 @@
 #define PS2_thorn						254 // þ
 #define PS2_y_DIAERESIS					255 // ÿ
 
-
 #define PS2_KEYMAP_SIZE 136
+
+#define SEND_TIMED_OUT 0
+#define SEND_NOT_ACKED 1			// KBD failed to set ACK bit correctly.
+#define SEND_REPLY_TIMEOUT 2		// Timeout waiting for response code from KBD.
+#define SEND_BYTE_REJECTED 0xFE		// KBD did not understand the byte value; response is resend request.
+#define SEND_BYTE_OKAY 0xFA			// KBD accepted byte value as valid.
 
 typedef struct {
 	uint8_t noshift[PS2_KEYMAP_SIZE];
@@ -181,11 +187,6 @@ typedef struct {
 
 
 extern const PROGMEM PS2Keymap_t PS2Keymap_US;
-extern const PROGMEM PS2Keymap_t PS2Keymap_German;
-extern const PROGMEM PS2Keymap_t PS2Keymap_French;
-extern const PROGMEM PS2Keymap_t PS2Keymap_Spanish;
-extern const PROGMEM PS2Keymap_t PS2Keymap_Italian;
-extern const PROGMEM PS2Keymap_t PS2Keymap_UK;
 
 
 /**
@@ -210,7 +211,7 @@ class PS2Keyboard {
     /**
      * Returns true if there is a char to be read, false if not.
      */
-    static bool available();
+    bool available();
 
     /* Discards any received data, sets available() to false without a call to read()
     */
@@ -227,6 +228,31 @@ class PS2Keyboard {
      */
     static int read();
     static int readUnicode();
+    /**
+      * Sends a byte to the keyboard.
+      *
+      * @param byteCmd Byte value for command to send.
+      *
+      * @return Unsigned 8-bit "send status" value from those named with
+      * SEND_ prefix.
+      */
+    static uint8_t send(uint8_t byteCmd);
+
+    /**
+     * Container for the current state of the keyboard interface.
+     */
+    struct KeyboardState {
+        uint8_t receiving;	// Indicates that a byte is being received from the keyboard.
+        uint8_t sending;	// Indicates that a byte is being sent to the keyboard.
+        uint8_t outgoing;	// Outgoing byte either in progress or last sent.
+    };
+
+    /**
+     * Gets the current state of the keyboard interface logic.
+     *
+     * @return Current KeyboardState.
+     */
+    static KeyboardState getState();
 };
 
 #endif

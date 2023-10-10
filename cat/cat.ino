@@ -1,88 +1,117 @@
-/*********************************************/
-/**         CERBERUS 2080's BIOS code       **/
-/**      Brought to you by The Byte Attic   **/
-/**        For the ATmega328p-PU (CAT)      **/
-/**     To be compiled in the arduino IDE   **/
-/**     (use Arduino Uno as target board)   **/
-/** Copyright 2020-2021 by Bernardo Kastrup **/
-/**            All rights reserved          **/
-/**      Code distributed under license     **/
-/*********************************************/
+//
+// Title:			Cerberus 2080/2100 CAT BIOS code
+// Author:			Bernado Kastrup aka The Byte Attic
+// Copyright:		2020-2023
+// Updated By:		Dean Belfield aka Break Into Program
+// Contributors:	Aleksandr Sharikhin
+// Created:			31/07/2021		
+// Last Updated:	09/10/2023 		
+//
+// For the ATmega328p-PU (CAT) to be compiled in the arduino IDE   
+// All rights reserved, code distributed under license     
+//
+// Provided AS-IS, without guarantees of any kind                        
+// This is NOT a commercial product as has not been exhaustively tested  
+//
+// The directive "F()", which tells the compiler to put strings in code memory 
+// instead of dynamic memory, is used as often as possible to save dynamic     
+// memory, the latter being the bottleneck of this code.   
+//
+// How to compile:
+//  - Use minicore library(https://github.com/MCUdude/MiniCore)
+//  - Select board ATmega328
+//  - Clock: External 16MHz
+//  - BOD: 4.3V
+//  - Varian: 328PB
 
-/** Provided AS-IS, without guarantees of any kind                        **/
-/** This is NOT a commercial product as has not been exhaustively tested  **/
+// Modinfo:
+// 10/08/2021: All recognised keystrokes sent to mailbox, F12 now returns to BIOS, 50hz NMI starts when code runs
+// 11/08/2021: Memory map now defined in configs, moved code start to 0x0205 to accomodate inbox
+// 12/08/2021: Refactored load, save and delFile. Now handles incoming messages from Z80/6502
+// 21/08/2021: Tweaks for sound command, bug fixes in incoming message handler
+// 06/10/2021: Tweaks for cat command
+// 23/11/2021: Moved PS2Keyboard library from Arduino library to src subdirectory
+// 22/07/2023: Working on Cerberus 2100 (Aleksandr Sharikhin)
+//             PS2 keyboard resets on start(more keyboards will work). 
+//             Optimizing loading splash screen. 
+//             Removed unused keymaps. 
+//             One command basic loading. Non blocking sound API.
+//             Updated load command - returning how many bytes was actually read
+// 27/08/2023: EEPROM-based persistent settings for mode and CPU speed (Aleksandr Sharikhin)
+// 09/10/2023: Merged with Cerberus 2080 code with conditional compilation
+//
 
-/** The directive "F()", which tells the compiler to put strings in code memory **/
-/** instead of dynamic memory, is used as often as possible to save dynamic     **/
-/** memory, the latter being the bottleneck of this code.                       **/
-
-/** Updated By:		Dean Belfield	**/
-/** Created:		31/07/2021		**/
-/** Last Updated:	23/11/2021 		**/
-
-//	Modinfo:
-//	10/08/2021:	All recognised keystrokes sent to mailbox, F12 now returns to BIOS, 50hz NMI starts when code runs
-//	11/08/2021:	Memory map now defined in configs, moved code start to 0x0205 to accomodate inbox
-//	12/08/2021:	Refactored load, save and delFile. Now handles incoming messages from Z80/6502
-//	21/08/2021:	Tweaks for sound command, bug fixes in incoming message handler
-//  06/10/2021: Tweaks for cat command
-//	23/11/2021:	Moved PS2Keyboard library from Arduino library to src subdirectory
-
-/** These libraries are built into the arduino IDE  **/
-
+// These libraries are built into the arduino IDE 
+//
 #include <SPI.h>
 #include <SD.h>
-#include <TimerOne.h>
+#include <EEPROM.h>
 
-/** For more information about this PS2Keyboard library:    **/
-/** http://www.arduino.cc/playground/Main/PS2Keyboard       **/
-/** http://www.pjrc.com/teensy/td_libs_PS2Keyboard.html     **/
-/** Note that the Arduino managed library is not the latest **/
-/** Install from the GitHub project in order to build       **/
+// These need to be installed in the library manager
+//
+#include <TimerOne.h> 					// v1.1.1
+
+// For more information about this PS2Keyboard library:   
+// http://www.arduino.cc/playground/Main/PS2Keyboard      
+// http://www.pjrc.com/teensy/td_libs_PS2Keyboard.html    
+// Note that the Arduino managed library is not the latest
+// Install from the GitHub project in order to build      
 
 #include "src/PS2Keyboard/PS2Keyboard.h"
 
-/** Compilation defaults **/
-#define	config_dev_mode	0			// Turn off various BIOS outputs to speed up development, specifically uploading code
-#define config_silent 0				// Turn off the startup jingle
-#define config_enable_nmi 1			// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
-#define config_default_cpu 1		// 0: 6502, 1: Z80
-#define config_default_speed 1		// 0: 4mhz, 1: 8mhz
-#define config_outbox_flag 0x0200	// Outbox flag memory location (byte)
-#define config_outbox_data 0x0201	// Outbox data memory location (byte)
-#define config_inbox_flag 0x0202	// Inbox flag memory location (byte)
-#define config_inbox_data 0x0203	// Inbox data memory location (word)
-#define config_code_start 0x0205	// Start location of code
+// Compilation defaults
+//
+#define config_board 1					// 0: Compile for Cerberus 2080, 1: Compile for Cerberus 2100
+#define	config_dev_mode	0				// Turn off various BIOS outputs to speed up development, specifically uploading code
+#define config_silent 0					// Turn off the startup jingle
+#define config_enable_nmi 1				// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
+#define config_default_mode 1			// 0: 6502, 1: Z80
+#define config_default_fast 1			// 0: 4mhz, 1: 8mhz
+#define config_outbox_flag 0x0200		// Outbox flag memory location (byte)
+#define config_outbox_data 0x0201		// Outbox data memory location (byte)
+#define config_inbox_flag 0x0202		// Inbox flag memory location (byte)
+#define config_inbox_data 0x0203		// Inbox data memory location (word)
+#define config_code_start 0x0205		// Start location of code
+#define config_eeprom_address_mode 0	// First EEPROM location
+#define config_eeprom_address_fast 1	// Second EEPROM location
 
-/** Pinout below defined as per Arduino Uno pin IDs **/
-/** The next pins go to SPACER **/
-#define SI A5     /** Serial Input, pin 28 on CAT **/
-#define SO A4     /** Serial Output, pin 27 on CAT **/
-#define SC A3     /** Shift Clock, pin 26 on CAT **/
-#define AOE A2    /** Address Output Enable, pin 25 on CAT **/
-#define RW A1     /** Memory Read/!Write, pin 24 on CAT **/
-#define LD A0     /** Latch Data, pin 23 on CAT **/
-#define CPUSLC 5  /** CPU SeLeCt, pin 11 on CAT **/
-#define CPUIRQ 6  /** CPU Interrupt ReQuest, pin 12 on CAT **/
-#define CPUGO 7   /** CPU Go/!Halt, pin 13 on CAT **/
-#define CPURST 8  /** CPU ReSeT, pin 14 on CAT **/
-#define CPUSPD 9  /** CPU SPeeD, pin 15 on CAT **/
-/** The next pins go to I/O devices **/
-#define KCLK 2    /** CLK pin connected to PS/2 keyboard (CAT pin 4) **/
-#define KDAT 3    /** DATA pin connected to PS/2 keyboard (CAT pin 5) **/
-#define SOUND 4   /** Sound output to buzzer, pin 6 on CAT **/
-#define CS 10     /** Chip Select for SD Card, pin 16 on CAT **/
-/** MISO, MOSI and SCK for SD Card are hardwired in CAT: **/
-/** CLK  -> pin 19 on CAT **/
-/** MISO -> pin 18 on CAT **/
-/** MOSI -> pin 17 on CAT **/
+// Arduino ATMega328 Aliases
+//
+#define SI A5							// Serial Input, pin 28 on CAT
+#define SO A4							// Serial Output, pin 27 on CAT
+#define SC A3							// Shift Clock, pin 26 on CAT 
+#define AOE A2							// Address Output Enable, pin 25 on CAT
+#define RW A1							// Memory Read/!Write, pin 24 on CAT
+#define LD A0							// Latch Data, pin 23 on CAT
+#define CPUSLC 5						// CPU SeLeCt, pin 11 on CAT
+#define CPUIRQ 6						// CPU Interrupt ReQuest, pin 12 on CAT
+#define CPUGO 7							// CPU Go/!Halt, pin 13 on CAT
+#define CPURST 8						// CPU ReSeT, pin 14 on CAT
+#define CPUSPD 9						// CPU SPeeD, pin 15 on CAT
+#define KCLK 2							// CLK pin connected to PS/2 keyboard (CAT pin 4)
+#define KDAT 3							// DATA pin connected to PS/2 keyboard (CAT pin 5)
+#define SOUND 4							// Sound output to buzzer, pin 6 on CAT
+#define CS 10							// Chip Select for SD Card, pin 16 on CAT
+#if config_board == 1
+#define FREE 25							// Bit 2 of CPU CLocK Speed, pin 19 on FAT-CAT
+#define XBUSACK 23						// eXpansion BUS ACKnowledgment, pin 3 on FAT-CAT, active LOW
+#define XBUSREQ 24						// eXpansion BUS REQuest, pin 6 on FAT-CAT, active LOW
+#define XIRQ 26							// eXpansion Interrupt ReQuest, pin 22 on FAT-CAT, active LOW
+#endif
 
-/** Now some stuff required by the libraries in use **/
+// MISO, MOSI and SCK for SD Card are hardwired in CAT:
+// CLK  -> pin 19 on CAT
+// MISO -> pin 18 on CAT
+// MOSI -> pin 17 on CAT
+
+// Now some stuff required by the libraries in use
+//
 const int chipSelect = CS;
 const int DataPin = KDAT;
 const int IRQpin = KCLK;
 
-/* Status constants */
+// Status constants
+//
 #define STATUS_DEFAULT 0
 #define STATUS_BOOT 1
 #define STATUS_READY 2
@@ -96,103 +125,119 @@ const int IRQpin = KCLK;
 #define STATUS_POWER 10
 #define STATUS_EOF 11
 
-/** Next is the string in CAT's internal memory containing the edit line, **/
-/** intialized in startup.                              **/
-volatile char editLine[38];
-volatile char previousEditLine[38];
+volatile char editLine[38];					// Current edit line buffer
+volatile char previousEditLine[38];			// Previous edit line buffer (allows for repeating previous command)
 
-/** The above is self-explanatory: it allows for repeating previous command **/
-volatile byte pos = 1;						/** Position in edit line currently occupied by cursor **/
-volatile bool mode = config_default_cpu;	/** false = 6502 mode, true = Z80 mode**/
-volatile bool cpurunning = false;			/** true = CPU is running, CAT should not use the buses **/
-volatile bool interruptFlag = false;		/** true = Triggered by interrupt **/
-volatile bool fast = config_default_speed;	/** true = 8 MHz CPU clock, false = 4 MHz CPU clock **/
-volatile File cd;							/** Used by BASIC directory commands **/
+volatile byte pos = 1;						// Position in edit line currently occupied by cursor 
+volatile bool mode;							// false = 6502 mode, true = Z80 mode
+volatile bool cpurunning = false;			// true = CPU is running, CAT should not use the buses 
+volatile bool interruptFlag = false;		// true = Triggered by interrupt 
+volatile bool fast;							// true = 8 MHz CPU clock, false = 4 MHz CPU clock 
 
-void(* resetFunc) (void) = 0;       		/** Software reset fuction at address 0 **/
-
+File cd;									// Used by BASIC directory commands
 PS2Keyboard keyboard;
 
+void(* resetFunc) (void) = 0;       		// Software reset fuction at address 0
+
+// Interrupt service routine attached to pin XIRQ (Cerberus 2100 only)
+//
+#if config_board == 1
+volatile bool expFlag = false;
+
+ISR(PCINT3_vect) {
+  expFlag = true;
+}
+#endif
+
+uint8_t read_setting(int idx, uint8_t bound_low, uint8_t bound_high, uint8_t default_value) {
+	uint8_t b = EEPROM.read(idx);
+	if(b < bound_low || b > bound_high) {
+		b = default_value;
+		EEPROM.write(idx, b);
+	}
+	return b;
+}
+
 void setup() {
-	/** First, declaring all the pins **/
+
+	// Read the default settings from EEPROM
+	//
+	mode = read_setting(config_eeprom_address_mode, 0, 1, config_default_mode);
+	fast = read_setting(config_eeprom_address_fast, 0, 1, config_default_fast);
+
+	// Declare the pins
+	//
   	pinMode(SO, OUTPUT);
-  	pinMode(SI, INPUT);               /** There will be pull-up and pull-down resistors in circuit **/
+  	pinMode(SI, INPUT);               // There will be pull-up and pull-down resistors in circuit
   	pinMode(SC, OUTPUT);
   	pinMode(AOE, OUTPUT);
   	pinMode(LD, OUTPUT);
   	pinMode(RW, OUTPUT);
   	pinMode(CPUSPD, OUTPUT);
-  	pinMode(KCLK, INPUT_PULLUP);      /** But here we need CAT's internal pull-up resistor **/
-  	pinMode(KDAT, INPUT_PULLUP);      /** And here too **/
+  	pinMode(KCLK, INPUT_PULLUP);      // But here we need CAT's internal pull-up resistor
+  	pinMode(KDAT, INPUT_PULLUP);      // And here too
   	pinMode(CPUSLC, OUTPUT);
   	pinMode(CPUIRQ, OUTPUT);
   	pinMode(CPUGO, OUTPUT);
   	pinMode(CPURST, OUTPUT);
   	pinMode(SOUND, OUTPUT);
-  	/** Writing default values to some of the output pins **/
+
+	// Write default vaues to some of the output pins
+	//
   	digitalWrite(RW, HIGH);
   	digitalWrite(SO, LOW);
   	digitalWrite(AOE, LOW);
   	digitalWrite(LD, LOW);
   	digitalWrite(SC, LOW);
-  	digitalWrite(CPUSPD, config_default_speed);
-  	digitalWrite(CPUSLC, config_default_cpu);
+  	digitalWrite(CPUSPD, fast);
+  	digitalWrite(CPUSLC, mode);
   	digitalWrite(CPUIRQ, LOW);
   	digitalWrite(CPUGO, LOW);
   	digitalWrite(CPURST, LOW);
-  	/** Now reset the CPUs **/
-  	resetCPUs();
-  	/** Clear edit line **/
-  	clearEditLine();
+	
+	// Attach an interrupt to XIRQ so to react to the expansion card timely (Cerberus 2100 only)
+	//
+	#if config_board == 1
+	pinMode(XBUSACK, OUTPUT);
+    digitalWrite(XBUSACK, HIGH);
+  	cli();	
+	PCICR  |= 0b00001000;				// Enables Port E Pin Change Interrupts
+	PCMSK3 |= 0b00001000;				// Enable Pin Change Interrupt on XIRQ
+	sei();	
+	#endif
+
+  	resetCPUs();						// Reset the CPUs
+  	clearEditLine();					// Clear the edit line buffers
   	storePreviousLine();
-  	Serial.begin(9600);
-	/** Initialize keyboard library **/
-  	keyboard.begin(DataPin, IRQpin);
-  	/** Now access uSD card and load character definitions so we can put something on the screen **/
+  	Serial.begin(115200);				// Initialise the serial library
+  	keyboard.begin(DataPin, IRQpin);	// Initialise the keyboard library
+	keyboard.send(0xFF); 				// Reset the keyboard
+
+  	// Now access uSD card and load character definitions so we can put something on the screen
+	//
   	if (!SD.begin(chipSelect)) {
-    	/** SD Card has either failed or is not present **/
-    	/** Since the character definitions thus can't be uploaded, accuse error with repeated tone and hang **/
+    	// SD Card has either failed or is not present
+    	// Since the character definitions thus can't be uploaded, accuse error with repeated tone and hang
     	while(true) {
       		tone(SOUND, 50, 150);
       		delay(500);
     	}
   	}
-  	/** Load character defs into memory **/
+  	// Load character defs into memory
+	//
   	if(load("chardefs.bin", 0xf000) != STATUS_READY) {
 		tone(SOUND, 50, 150);
 	  }
-  	/**********************************************************/
-  	/** Now prepare the screen **/
+
+  	// Now prepare the screen 
+	//
   	ccls();
   	cprintFrames();
-  	/** Load the CERBERUS icon image on the screen ************/
-  	int inChar;
-  	if(!SD.exists("cerbicon.img")) {
-		tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
-	}
-  	else {
-    	File dataFile2 = SD.open("cerbicon.img"); /** Open the image file **/
-    	if (!dataFile2) {
-			tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
-		}
-    	else {
-      		for (byte y = 2; y <= 25; y++) {
-        		for (byte x = 2; x <= 39; x++) {
-	          		String tokenText = "";
-          			while (isDigit(inChar = dataFile2.read())) {
-						tokenText += char(inChar);
-					}
-          			cprintChar(x, y, tokenText.toInt());
-        		}
-			}
-      		dataFile2.close();
-    	}
-  	}
-  	/**********************************************************/
+	cprintBanner();
+
   	cprintStatus(STATUS_BOOT);
-  	/** Play a little jingle while keyboard finishes initializing **/
   	#if config_silent == 0
-  	playJingle();
+  	playJingle();							// Play a little jingle whilst the keyboard finishes initialising
   	#endif
   	delay(1000);
   	cprintStatus(STATUS_DEFAULT);
@@ -203,10 +248,10 @@ char readKey() {
 	char ascii = 0;
 	if(keyboard.available()) {
 		ascii = keyboard.read();
-    	tone(SOUND, 750, 5);            	/** Clicking sound for auditive feedback to key presses **/
+    	tone(SOUND, 750, 5);            	// Clicking sound for auditive feedback to key presses 
 		#if config_dev_mode == 0        	
   		if(!cpurunning) {
-			cprintStatus(STATUS_DEFAULT);	/** Update status bar **/	
+			cprintStatus(STATUS_DEFAULT);	// Update status bar
 		}
 		#endif 
 	}
@@ -219,25 +264,26 @@ char readKey() {
 // The main loop
 //
 void loop() {
-	char ascii = readKey();	/** Stores ascii value of key pressed **/
-	byte i;     			/** Just a counter **/
+	char ascii = readKey();	// Stores ascii value of key pressed 
+	byte i;     			// Just a counter 
 
-  	/** Wait for a key to be pressed, then take it from there... **/
+  	// Wait for a key to be pressed, then take it from there... 
+	//
 	if(ascii > 0) {
     	if(cpurunning) {
-    		if (ascii == PS2_F12) {  /** This happens if F1 has been pressed... and so on... **/
+    		if (ascii == PS2_F12) {  					// This happens if F1 has been pressed... and so on...
 	    		stopCode();
     		}
     		else {
-				cpurunning = false;						/** Just stops interrupts from happening **/
-        		digitalWrite(CPUGO, LOW);   			/** Pause the CPU and tristate its buses to high-Z **/
+				cpurunning = false;						// Just stops interrupts from happening 
+        		digitalWrite(CPUGO, LOW);   			// Pause the CPU and tristate its buses to high-Z 
       			byte mode = cpeek(config_outbox_flag);
-      			cpoke(config_outbox_data, ascii);       /** Put token code of pressed key in the CPU's mailbox, at config_outbox_data **/
-	         	cpoke(config_outbox_flag, 0x01);		/** Flag that there is new mail for the CPU waiting at the mailbox **/
-      			digitalWrite(CPUGO, HIGH);  			/** Let the CPU go **/
+      			cpoke(config_outbox_data, ascii);       // Put token code of pressed key in the CPU's mailbox, at config_outbox_data
+	         	cpoke(config_outbox_flag, 0x01);		// Flag that there is new mail for the CPU waiting at the mailbox
+      			digitalWrite(CPUGO, HIGH);  			// Let the CPU go
 				cpurunning = true;
       			#if config_enable_nmi == 0
-      			digitalWrite(CPUIRQ, HIGH); /** Trigger an interrupt **/
+      			digitalWrite(CPUIRQ, HIGH); 			// Trigger an interrupt 
       			digitalWrite(CPUIRQ, LOW);
       			#endif
     		}
@@ -259,33 +305,70 @@ void loop() {
         			break;
         		case PS2_DELETE:
         		case PS2_LEFTARROW:
-			        editLine[pos] = 32; /** Put an empty space in current cursor position **/
-        			if (pos > 1) pos--; /** Update cursor position, unless reached left-most position already **/
-        			editLine[pos] = 0;  /** Put cursor on updated position **/
-        			cprintEditLine();   /** Print the updated edit line **/
+			        editLine[pos] = 32;					// Put an empty space in current cursor position
+        			if (pos > 1) pos--;					// Update cursor position, unless reached left-most position already
+        			editLine[pos] = 0;					// Put cursor on updated position
+        			cprintEditLine();					// Print the updated edit line
         			break;
         		default:
-		        	editLine[pos] = ascii;  /** Put new character in current cursor position **/
-        			if (pos < 37) pos++;    /** Update cursor position **/
-        			editLine[pos] = 0;      /** Place cursor to the right of new character **/
-    				#if config_dev_mode == 0        	
-		       		cprintEditLine();       /** Print the updated edit line **/
+		        	editLine[pos] = ascii;				// Put new character in current cursor position
+        			if (pos < 37) pos++;				// Update cursor position
+        			editLine[pos] = 0;					// Place cursor to the right of new character
+    				#if config_dev_mode == 0			        	
+		       		cprintEditLine();					// Print the updated edit line 
 	       			#endif
         			break;        
 			}
 		}    
 	}
-	if(interruptFlag) {						/** If the interrupt flag is set then **/
+	if(interruptFlag) {									// If the interrupt flag is set then
 		interruptFlag = false;
-		messageHandler();					/** Run the inbox message handler **/
+		messageHandler();								// Run the inbox message handler
 	}
+	#if config_board == 1								// Run the XBUS handler
+	xbusHandler();
+	#endif 
 }
+
+// The XBUS handler (Cerberus 2100 only)
+//
+#if config_board == 1
+void xbusHandler() {
+	// Now we deal with bus access requests from the expansion card
+	//
+	if(digitalRead(XBUSREQ) == LOW) { 					// The expansion card is requesting bus access... 
+    	if(cpurunning) { 								// If a CPU is running (the internal buses being therefore not tristated)...
+      		digitalWrite(CPUGO, LOW);					// ...first pause the CPU and tristate the buses...
+      		digitalWrite(XBUSACK, LOW); 				// ...then acknowledge request; buses are now under the control of the expansion card
+      		while (digitalRead(XBUSREQ) == LOW); 		// Wait until the expansion card is done...
+      		digitalWrite(XBUSACK, HIGH); 				// ...then let the expansion card know that the buses are no longer available to it
+      		digitalWrite(CPUGO, HIGH); 					// Finally, let the CPU run again
+    	} else { 										// If a CPU is NOT running...
+      		digitalWrite(XBUSACK, LOW); 				// Acknowledge request; buses are now under the control of the expansion card
+      		while (digitalRead(XBUSREQ) == LOW);	 	// Wait until the expansion card is done...
+      		digitalWrite(XBUSACK, HIGH); 				// ...then let the expansion card know that the buses are no longer available to it
+    	}
+  	}
+  	// And finally, deal with the expansion flag (which will be 'true' if there has been an XIRQ strobe from an expansion card)
+	//
+  	if(expFlag) {
+    	if(cpurunning) {
+      		digitalWrite(CPUGO, LOW); 					// Pause the CPU and tristate its buses **/
+      		cpoke(0xEFFF, 0x01); 						// Flag that there is data from the expansion card waiting for the CPU in memory
+      		digitalWrite(CPUGO, HIGH);					// Let the CPU go
+      		digitalWrite(CPUIRQ, HIGH); 				// Trigger an interrupt so the CPU knows there's data waiting for it in memory
+      		digitalWrite(CPUIRQ, LOW);
+    	}
+    	expFlag = false; 								// Reset the flag
+  	}
+}
+#endif
 
 // CPU Interrupt Routine (50hz)
 //
 void cpuInterrupt(void) {
-  	if(cpurunning) {							// Only run this code if cpu is running 
-	   	digitalWrite(CPUIRQ, HIGH);		 		// Trigger an NMI interrupt
+  	if(cpurunning) {									// Only run this code if cpu is running 
+	   	digitalWrite(CPUIRQ, HIGH);		 				// Trigger an NMI interrupt
 	   	digitalWrite(CPUIRQ, LOW);
   	}
 	interruptFlag = true;
@@ -295,18 +378,18 @@ void cpuInterrupt(void) {
 //
 void messageHandler(void) {
   	int	flag, status;
-  	byte retVal = 0x00;							// Return status; default is OK
-  	unsigned int address;						// Pointer for data
+  	byte retVal = 0x00;									// Return status; default is OK
+  	unsigned int address;								// Pointer for data
 
- 	if(cpurunning) {							// Only run this code if cpu is running 
-	 	cpurunning = false;						// Just to prevent interrupts from happening
-		digitalWrite(CPUGO, LOW); 				// Pause the CPU and tristate its buses to high-Z
-		flag = cpeek(config_inbox_flag);		// Fetch the inbox flag 
+ 	if(cpurunning) {									// Only run this code if cpu is running 
+	 	cpurunning = false;								// Just to prevent interrupts from happening
+		digitalWrite(CPUGO, LOW); 						// Pause the CPU and tristate its buses to high-Z
+		flag = cpeek(config_inbox_flag);				// Fetch the inbox flag 
 		if(flag > 0 && flag < 0x80) {
 			address = cpeekW(config_inbox_data);
 			switch(flag) {
 				case 0x01:
-					cmdSound(address);
+					cmdSound(address, true);
 					break;
 				case 0x02: 
 					status = cmdLoad(address);
@@ -338,30 +421,36 @@ void messageHandler(void) {
 						retVal = (byte)(status + 0x80);
 					}
 					break;
+        		case 0x7E:
+          			cmdSound(address, false);
+          			status = STATUS_READY;
+          			break;
 				case 0x7F:
 					resetFunc();
 					break;
 			}
-			cpoke(config_inbox_flag, retVal);	// Flag we're done - values >= 0x80 are error codes
+			cpoke(config_inbox_flag, retVal);			// Flag we're done - values >= 0x80 are error codes
 		}
-		digitalWrite(CPUGO, HIGH);   			// Restart the CPU 
+		digitalWrite(CPUGO, HIGH);   					// Restart the CPU 
 		cpurunning = true;
  	}
 }
 
 // Handle SOUND command from BASIC
 //
-void cmdSound(unsigned int address) {
+void cmdSound(unsigned int address, bool blocking) {
 	unsigned int frequency = cpeekW(address);
 	unsigned int duration = cpeekW(address + 2) * 50;
 	tone(SOUND, frequency, duration);
-	delay(duration);
+	if(blocking) {
+		delay(duration);
+	}
 }
 
 // Handle ERASE command from BASIC
 //
 int cmdDelFile(unsigned int address) {
-	cpeekStr(address, editLine, 38);
+	cpeekStr(address, (byte *)editLine, 38);
 	return delFile((char *)editLine);	
 }
 
@@ -370,7 +459,7 @@ int cmdDelFile(unsigned int address) {
 int cmdLoad(unsigned int address) {
 	unsigned int startAddr = cpeekW(address);
 	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, editLine, 38);
+	cpeekStr(address + 4, (byte *)editLine, 38);
 	return load((char *)editLine, startAddr);
 }
 
@@ -379,7 +468,7 @@ int cmdLoad(unsigned int address) {
 int cmdSave(unsigned int address) {
 	unsigned int startAddr = cpeekW(address);
 	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, editLine, 38);
+	cpeekStr(address + 4, (byte *)editLine, 38);
 	return save((char *)editLine, startAddr, startAddr + length - 1);
 }
 
@@ -469,11 +558,13 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   /** 6502 ***********************************************************************************/
   } else if (nextWord == F("6502")) {     /** Switches to 6502 mode **/
     mode = false;
+    EEPROM.write(config_eeprom_address_mode, 0);
     digitalWrite(CPUSLC, LOW);            /** Tell CAT of the new mode **/
     cprintStatus(STATUS_READY);
   /** Z80 ***********************************************************************************/
   } else if (nextWord == F("z80")) {      /** Switches to Z80 mode **/
     mode = true;
+    EEPROM.write(config_eeprom_address_mode, 1);
     digitalWrite(CPUSLC, HIGH);           /** Tell CAT of the new mode **/
     cprintStatus(STATUS_READY);
   /** RESET *********************************************************************************/
@@ -483,11 +574,13 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   } else if (nextWord == F("fast")) {     /** Sets CPU clock at 8 MHz **/
     digitalWrite(CPUSPD, HIGH);
     fast = true;
-    cprintStatus(STATUS_READY);
+    EEPROM.write(config_eeprom_address_fast, 1);
+	cprintStatus(STATUS_READY);
   /** SLOW **********************************************************************************/
   } else if (nextWord == F("slow")) {     /** Sets CPU clock at 4 MHz **/
     digitalWrite(CPUSPD, LOW);
     fast = false;
+    EEPROM.write(config_eeprom_address_fast, 0);
     cprintStatus(STATUS_READY);
   /** DIR ***********************************************************************************/
   } else if (nextWord == F("dir")) {      /** Lists files on uSD card **/
@@ -505,6 +598,17 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   } else if (nextWord == F("run")) {      /** Runs the code in memory **/
     for (i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
     runCode();
+  /** SHORTCUTS FOR BASIC *******************************************************************/
+  } else if (nextWord == F("basic6502")) {
+    mode = false;
+    digitalWrite(CPUSLC, LOW);
+    catLoad("basic65.bin","", false); 
+    runCode();
+  } else if (nextWord == F("basicz80")) {
+    mode = true;
+    digitalWrite(CPUSLC, HIGH);
+    catLoad("basicz80.bin","", false); 
+    runCode();	
   /** SAVE **********************************************************************************/
   } else if (nextWord == F("save")) {
     nextWord = getNextWord(false);						/** Start start address **/
@@ -548,7 +652,11 @@ String getNextWord(bool fromTheBeginning) {
 
 void help() {
   cls();
+  #if config_board == 0
   cprintString(3, 2,  F("The Byte Attic's CERBERUS 2080 (tm)"));
+  #else
+  cprintString(3, 2,  F("The Byte Attic's CERBERUS 2100 (tm)"));
+  #endif
   cprintString(3, 3,  F("        AVAILABLE COMMANDS:"));
   cprintString(3, 4,  F(" (All numbers must be hexadecimal)"));
   cprintString(3, 6,  F("0xADDR BYTE: Writes BYTE at ADDR"));
@@ -670,6 +778,7 @@ void stopCode() {
     load("chardefs.bin", 0xf000);/** Reset the character definitions in case the CPU changed them **/
     ccls();                     /** Clear screen completely **/
     cprintFrames();             /** Reprint the wire frame in case the CPU code messed with it **/
+    cprintBanner();
     cprintStatus(STATUS_DEFAULT);            /** Update status bar **/
     clearEditLine();            /** Clear and display the edit line **/
 }
@@ -889,7 +998,11 @@ void cprintStatus(byte status) {
       		center(F("Feel the power of Dutch design!!"));
       		break;
     	default:
+			#if config_board == 0
       		cprintString(2, 27, F("      CERBERUS 2080: "));
+			#else
+      		cprintString(2, 27, F("      CERBERUS 2100: "));
+			#endif
       		if (mode) cprintString(23, 27, F(" Z80, "));
       		else cprintString(23, 27, F("6502, "));
       		if (fast) cprintString(29, 27, F("8 MHz"));
@@ -954,6 +1067,32 @@ void cprintFrames() {
   	for (y = 1; y <= 30; y++) {
 	    cprintChar(1, y, 133);
 	    cprintChar(40, y, 5);
+  	}
+}
+
+void cprintBanner() {
+ 	/** Load the CERBERUS icon image on the screen ************/
+  	int inChar;
+  	if(!SD.exists("cerbicon.img")) {
+		tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
+	}
+  	else {
+    	File dataFile2 = SD.open("cerbicon.img"); /** Open the image file **/
+    	if (!dataFile2) {
+			tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
+		}
+    	else {
+      		for (byte y = 2; y <= 25; y++) {
+        		for (byte x = 2; x <= 39; x++) {
+	          		String tokenText = "";
+          			while (isDigit(inChar = dataFile2.read())) {
+						tokenText += char(inChar);
+					}
+          			cprintChar(x, y, tokenText.toInt());
+        		}
+			}
+      		dataFile2.close();
+    	}
   	}
 }
 
