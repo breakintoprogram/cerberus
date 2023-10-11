@@ -59,56 +59,19 @@
 
 #include "src/PS2Keyboard/PS2Keyboard.h"
 
-// Compilation defaults
+// And all the internal includes
 //
-#define config_board 1					// 0: Compile for Cerberus 2080, 1: Compile for Cerberus 2100
-#define	config_dev_mode	0				// Turn off various BIOS outputs to speed up development, specifically uploading code
-#define config_silent 0					// Turn off the startup jingle
-#define config_enable_nmi 1				// Turn on the 50hz NMI timer when CPU is running. If set to 0 will only trigger an NMI on keypress
-#define config_default_mode 1			// 0: 6502, 1: Z80
-#define config_default_fast 1			// 0: 4mhz, 1: 8mhz
-#define config_outbox_flag 0x0200		// Outbox flag memory location (byte)
-#define config_outbox_data 0x0201		// Outbox data memory location (byte)
-#define config_inbox_flag 0x0202		// Inbox flag memory location (byte)
-#define config_inbox_data 0x0203		// Inbox data memory location (word)
-#define config_code_start 0x0205		// Start location of code
-#define config_eeprom_address_mode 0	// First EEPROM location
-#define config_eeprom_address_fast 1	// Second EEPROM location
-
-// Arduino ATMega328 Aliases
-//
-#define SI A5							// Serial Input, pin 28 on CAT
-#define SO A4							// Serial Output, pin 27 on CAT
-#define SC A3							// Shift Clock, pin 26 on CAT 
-#define AOE A2							// Address Output Enable, pin 25 on CAT
-#define RW A1							// Memory Read/!Write, pin 24 on CAT
-#define LD A0							// Latch Data, pin 23 on CAT
-#define CPUSLC 5						// CPU SeLeCt, pin 11 on CAT
-#define CPUIRQ 6						// CPU Interrupt ReQuest, pin 12 on CAT
-#define CPUGO 7							// CPU Go/!Halt, pin 13 on CAT
-#define CPURST 8						// CPU ReSeT, pin 14 on CAT
-#define CPUSPD 9						// CPU SPeeD, pin 15 on CAT
-#define KCLK 2							// CLK pin connected to PS/2 keyboard (CAT pin 4)
-#define KDAT 3							// DATA pin connected to PS/2 keyboard (CAT pin 5)
-#define SOUND 4							// Sound output to buzzer, pin 6 on CAT
-#define CS 10							// Chip Select for SD Card, pin 16 on CAT
-#if config_board == 1
-#define FREE 25							// Bit 2 of CPU CLocK Speed, pin 19 on FAT-CAT
-#define XBUSACK 23						// eXpansion BUS ACKnowledgment, pin 3 on FAT-CAT, active LOW
-#define XBUSREQ 24						// eXpansion BUS REQuest, pin 6 on FAT-CAT, active LOW
-#define XIRQ 26							// eXpansion Interrupt ReQuest, pin 22 on FAT-CAT, active LOW
-#endif
-
-// MISO, MOSI and SCK for SD Card are hardwired in CAT:
-// CLK  -> pin 19 on CAT
-// MISO -> pin 18 on CAT
-// MOSI -> pin 17 on CAT
+#include "config.h"
+#include "hardware.h"
 
 // Now some stuff required by the libraries in use
 //
-const int chipSelect = CS;
-const int DataPin = KDAT;
-const int IRQpin = KCLK;
+const int	chipSelect = CS;
+const int	DataPin = KDAT;
+const int	IRQpin = KCLK;
+
+const char * bannerFilename = "cerbicon.img";
+const char * helpFilename = "help.txt";
 
 // Status constants
 //
@@ -129,84 +92,32 @@ volatile char editLine[38];					// Current edit line buffer
 volatile char previousEditLine[38];			// Previous edit line buffer (allows for repeating previous command)
 
 volatile byte pos = 1;						// Position in edit line currently occupied by cursor 
-volatile bool mode;							// false = 6502 mode, true = Z80 mode
-volatile bool cpurunning = false;			// true = CPU is running, CAT should not use the buses 
-volatile bool interruptFlag = false;		// true = Triggered by interrupt 
-volatile bool fast;							// true = 8 MHz CPU clock, false = 4 MHz CPU clock 
 
-File cd;									// Used by BASIC directory commands
-PS2Keyboard keyboard;
-
-void(* resetFunc) (void) = 0;       		// Software reset fuction at address 0
+File		cd;								// Used by BASIC directory commands
+PS2Keyboard	keyboard;
+Hardware	cerberus(config_board);
 
 // Interrupt service routine attached to pin XIRQ (Cerberus 2100 only)
 //
 #if config_board == 1
-volatile bool expFlag = false;
-
 ISR(PCINT3_vect) {
-  expFlag = true;
+  cerberus.expFlag = true;
 }
 #endif
 
-uint8_t read_setting(int idx, uint8_t bound_low, uint8_t bound_high, uint8_t default_value) {
-	uint8_t b = EEPROM.read(idx);
-	if(b < bound_low || b > bound_high) {
-		b = default_value;
-		EEPROM.write(idx, b);
-	}
-	return b;
+// CPU Interrupt Routine (50hz)
+//
+void cpuInterrupt(void) {
+  	if(cerberus.cpuRunning) {							// Only run this code if cpu is running 
+	   	digitalWrite(CPUIRQ, HIGH);		 				// Trigger an NMI interrupt
+	   	digitalWrite(CPUIRQ, LOW);
+  	}
+	cerberus.interruptFlag = true;
 }
 
 void setup() {
-
-	// Read the default settings from EEPROM
-	//
-	mode = read_setting(config_eeprom_address_mode, 0, 1, config_default_mode);
-	fast = read_setting(config_eeprom_address_fast, 0, 1, config_default_fast);
-
-	// Declare the pins
-	//
-  	pinMode(SO, OUTPUT);
-  	pinMode(SI, INPUT);               // There will be pull-up and pull-down resistors in circuit
-  	pinMode(SC, OUTPUT);
-  	pinMode(AOE, OUTPUT);
-  	pinMode(LD, OUTPUT);
-  	pinMode(RW, OUTPUT);
-  	pinMode(CPUSPD, OUTPUT);
-  	pinMode(KCLK, INPUT_PULLUP);      // But here we need CAT's internal pull-up resistor
-  	pinMode(KDAT, INPUT_PULLUP);      // And here too
-  	pinMode(CPUSLC, OUTPUT);
-  	pinMode(CPUIRQ, OUTPUT);
-  	pinMode(CPUGO, OUTPUT);
-  	pinMode(CPURST, OUTPUT);
-  	pinMode(SOUND, OUTPUT);
-
-	// Write default vaues to some of the output pins
-	//
-  	digitalWrite(RW, HIGH);
-  	digitalWrite(SO, LOW);
-  	digitalWrite(AOE, LOW);
-  	digitalWrite(LD, LOW);
-  	digitalWrite(SC, LOW);
-  	digitalWrite(CPUSPD, fast);
-  	digitalWrite(CPUSLC, mode);
-  	digitalWrite(CPUIRQ, LOW);
-  	digitalWrite(CPUGO, LOW);
-  	digitalWrite(CPURST, LOW);
-	
-	// Attach an interrupt to XIRQ so to react to the expansion card timely (Cerberus 2100 only)
-	//
-	#if config_board == 1
-	pinMode(XBUSACK, OUTPUT);
-    digitalWrite(XBUSACK, HIGH);
-  	cli();	
-	PCICR  |= 0b00001000;				// Enables Port E Pin Change Interrupts
-	PCMSK3 |= 0b00001000;				// Enable Pin Change Interrupt on XIRQ
-	sei();	
-	#endif
-
-  	resetCPUs();						// Reset the CPUs
+	cerberus.initialise();				// Initialise the board
+  	cerberus.resetCPU();				// Reset the CPUs
   	clearEditLine();					// Clear the edit line buffers
   	storePreviousLine();
   	Serial.begin(115200);				// Initialise the serial library
@@ -227,11 +138,11 @@ void setup() {
 	//
   	if(load("chardefs.bin", 0xf000) != STATUS_READY) {
 		tone(SOUND, 50, 150);
-	  }
+	}
 
   	// Now prepare the screen 
 	//
-  	ccls();
+  	cerberus.cls();
   	cprintFrames();
 	cprintBanner();
 
@@ -250,7 +161,7 @@ char readKey() {
 		ascii = keyboard.read();
     	tone(SOUND, 750, 5);            	// Clicking sound for auditive feedback to key presses 
 		#if config_dev_mode == 0        	
-  		if(!cpurunning) {
+  		if(!cerberus.cpuRunning) {
 			cprintStatus(STATUS_DEFAULT);	// Update status bar
 		}
 		#endif 
@@ -270,20 +181,20 @@ void loop() {
   	// Wait for a key to be pressed, then take it from there... 
 	//
 	if(ascii > 0) {
-    	if(cpurunning) {
-    		if (ascii == PS2_F12) {  					// This happens if F1 has been pressed... and so on...
+    	if(cerberus.cpuRunning) {
+    		if (ascii == PS2_F12) {  								// This happens if F12 has been pressed... and so on...
 	    		stopCode();
     		}
     		else {
-				cpurunning = false;						// Just stops interrupts from happening 
-        		digitalWrite(CPUGO, LOW);   			// Pause the CPU and tristate its buses to high-Z 
-      			byte mode = cpeek(config_outbox_flag);
-      			cpoke(config_outbox_data, ascii);       // Put token code of pressed key in the CPU's mailbox, at config_outbox_data
-	         	cpoke(config_outbox_flag, 0x01);		// Flag that there is new mail for the CPU waiting at the mailbox
-      			digitalWrite(CPUGO, HIGH);  			// Let the CPU go
-				cpurunning = true;
+				cerberus.cpuRunning = false;						// Just stops interrupts from happening 
+        		digitalWrite(CPUGO, LOW);   						// Pause the CPU and tristate its buses to high-Z 
+      			byte mode = cerberus.peek(ptr_outbox_flag);
+      			cerberus.poke(ptr_outbox_data, byte(ascii));		// Put token code of pressed key in the CPU's mailbox, at ptr_outbox_data
+	         	cerberus.poke(ptr_outbox_flag, byte(0x01));			// Flag that there is new mail for the CPU waiting at the mailbox
+      			digitalWrite(CPUGO, HIGH);  						// Let the CPU go
+				cerberus.cpuRunning = true;
       			#if config_enable_nmi == 0
-      			digitalWrite(CPUIRQ, HIGH); 			// Trigger an interrupt 
+      			digitalWrite(CPUIRQ, HIGH); 						// Trigger an interrupt 
       			digitalWrite(CPUIRQ, LOW);
       			#endif
     		}
@@ -321,57 +232,11 @@ void loop() {
 			}
 		}    
 	}
-	if(interruptFlag) {									// If the interrupt flag is set then
-		interruptFlag = false;
+	if(cerberus.interruptFlag) {						// If the interrupt flag is set then
+		cerberus.interruptFlag = false;
 		messageHandler();								// Run the inbox message handler
 	}
-	#if config_board == 1								// Run the XBUS handler
-	xbusHandler();
-	#endif 
-}
-
-// The XBUS handler (Cerberus 2100 only)
-//
-#if config_board == 1
-void xbusHandler() {
-	// Now we deal with bus access requests from the expansion card
-	//
-	if(digitalRead(XBUSREQ) == LOW) { 					// The expansion card is requesting bus access... 
-    	if(cpurunning) { 								// If a CPU is running (the internal buses being therefore not tristated)...
-      		digitalWrite(CPUGO, LOW);					// ...first pause the CPU and tristate the buses...
-      		digitalWrite(XBUSACK, LOW); 				// ...then acknowledge request; buses are now under the control of the expansion card
-      		while (digitalRead(XBUSREQ) == LOW); 		// Wait until the expansion card is done...
-      		digitalWrite(XBUSACK, HIGH); 				// ...then let the expansion card know that the buses are no longer available to it
-      		digitalWrite(CPUGO, HIGH); 					// Finally, let the CPU run again
-    	} else { 										// If a CPU is NOT running...
-      		digitalWrite(XBUSACK, LOW); 				// Acknowledge request; buses are now under the control of the expansion card
-      		while (digitalRead(XBUSREQ) == LOW);	 	// Wait until the expansion card is done...
-      		digitalWrite(XBUSACK, HIGH); 				// ...then let the expansion card know that the buses are no longer available to it
-    	}
-  	}
-  	// And finally, deal with the expansion flag (which will be 'true' if there has been an XIRQ strobe from an expansion card)
-	//
-  	if(expFlag) {
-    	if(cpurunning) {
-      		digitalWrite(CPUGO, LOW); 					// Pause the CPU and tristate its buses **/
-      		cpoke(0xEFFF, 0x01); 						// Flag that there is data from the expansion card waiting for the CPU in memory
-      		digitalWrite(CPUGO, HIGH);					// Let the CPU go
-      		digitalWrite(CPUIRQ, HIGH); 				// Trigger an interrupt so the CPU knows there's data waiting for it in memory
-      		digitalWrite(CPUIRQ, LOW);
-    	}
-    	expFlag = false; 								// Reset the flag
-  	}
-}
-#endif
-
-// CPU Interrupt Routine (50hz)
-//
-void cpuInterrupt(void) {
-  	if(cpurunning) {									// Only run this code if cpu is running 
-	   	digitalWrite(CPUIRQ, HIGH);		 				// Trigger an NMI interrupt
-	   	digitalWrite(CPUIRQ, LOW);
-  	}
-	interruptFlag = true;
+	cerberus.xbusHandler();
 }
 
 // Inbox message handler
@@ -381,12 +246,12 @@ void messageHandler(void) {
   	byte retVal = 0x00;									// Return status; default is OK
   	unsigned int address;								// Pointer for data
 
- 	if(cpurunning) {									// Only run this code if cpu is running 
-	 	cpurunning = false;								// Just to prevent interrupts from happening
+ 	if(cerberus.cpuRunning) {							// Only run this code if cpu is running 
+	 	cerberus.cpuRunning = false;					// Just to prevent interrupts from happening
 		digitalWrite(CPUGO, LOW); 						// Pause the CPU and tristate its buses to high-Z
-		flag = cpeek(config_inbox_flag);				// Fetch the inbox flag 
+		flag = cerberus.peek(ptr_inbox_flag);			// Fetch the inbox flag 
 		if(flag > 0 && flag < 0x80) {
-			address = cpeekW(config_inbox_data);
+			address = cerberus.peekWord(ptr_inbox_data);
 			switch(flag) {
 				case 0x01:
 					cmdSound(address, true);
@@ -426,21 +291,21 @@ void messageHandler(void) {
           			status = STATUS_READY;
           			break;
 				case 0x7F:
-					resetFunc();
+					cerberus.reset();
 					break;
 			}
-			cpoke(config_inbox_flag, retVal);			// Flag we're done - values >= 0x80 are error codes
+			cerberus.poke(ptr_inbox_flag, retVal);		// Flag we're done - values >= 0x80 are error codes
 		}
 		digitalWrite(CPUGO, HIGH);   					// Restart the CPU 
-		cpurunning = true;
+		cerberus.cpuRunning = true;
  	}
 }
 
 // Handle SOUND command from BASIC
 //
 void cmdSound(unsigned int address, bool blocking) {
-	unsigned int frequency = cpeekW(address);
-	unsigned int duration = cpeekW(address + 2) * 50;
+	unsigned int frequency = cerberus.peekWord(address);
+	unsigned int duration = cerberus.peekWord(address + 2) * 50;
 	tone(SOUND, frequency, duration);
 	if(blocking) {
 		delay(duration);
@@ -450,46 +315,46 @@ void cmdSound(unsigned int address, bool blocking) {
 // Handle ERASE command from BASIC
 //
 int cmdDelFile(unsigned int address) {
-	cpeekStr(address, (byte *)editLine, 38);
+	cerberus.peekString(address, (byte *)editLine, 38);
 	return delFile((char *)editLine);	
 }
 
 // Handle LOAD command from BASIC
 //
 int cmdLoad(unsigned int address) {
-	unsigned int startAddr = cpeekW(address);
-	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, (byte *)editLine, 38);
+	unsigned int startAddr = cerberus.peekWord(address);
+	unsigned int length = cerberus.peekWord(address + 2);
+	cerberus.peekString(address + 4, (byte *)editLine, 38);
 	return load((char *)editLine, startAddr);
 }
 
 // Handle SAVE command from BASIC
 //
 int cmdSave(unsigned int address) {
-	unsigned int startAddr = cpeekW(address);
-	unsigned int length = cpeekW(address + 2);
-	cpeekStr(address + 4, (byte *)editLine, 38);
+	unsigned int startAddr = cerberus.peekWord(address);
+	unsigned int length = cerberus.peekWord(address + 2);
+	cerberus.peekString(address + 4, (byte *)editLine, 38);
 	return save((char *)editLine, startAddr, startAddr + length - 1);
 }
 
 // Handle CAT command from BASIC
 //
 int cmdCatOpen(unsigned int address) {
-	cd = SD.open("/");						// Start the process first by opening the directory
+	cd = SD.open("/");								// Start the process first by opening the directory
 	return STATUS_READY;
 }
 
-int cmdCatEntry(unsigned int address) {		// Subsequent calls to this will read the directory entries
+int cmdCatEntry(unsigned int address) {				// Subsequent calls to this will read the directory entries
 	File entry;
-	entry = cd.openNextFile();				// Open the next file
-	if(!entry) {							// If we've read past the last file in the directory
-		cd.close();							// Then close the directory
-		return STATUS_EOF;					// And return end of file
+	entry = cd.openNextFile();						// Open the next file
+	if(!entry) {									// If we've read past the last file in the directory
+		cd.close();									// Then close the directory
+		return STATUS_EOF;							// And return end of file
 	}
-	cpokeL(address, entry.size());			// First four bytes are the length
-	cpokeStr(address + 4, entry.name());	// Followed by the filename, zero terminated
-	entry.close();							// Close the directory entry
-	return STATUS_READY;					// Return READY
+	cerberus.poke(address, entry.size());			// First four bytes are the length
+	cerberus.poke(address + 4, entry.name());		// Followed by the filename, zero terminated
+	entry.close();									// Close the directory entry
+	return STATUS_READY;							// Return READY
 }
 
 /************************************************************************************************/
@@ -515,8 +380,8 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     while (nextNextWord != "") {                /** For as long as user has typed in a byte, store it **/
       if(nextNextWord.charAt(0) != '#') {
         data = strtol(nextNextWord.c_str(), NULL, 16);/** Converts to HEX number type **/
-        while( cpeek(addr) != data ) {          /** Serial comms may cause writes to be missed?? **/
-          cpoke(addr, data);
+        while( cerberus.peek(addr) != data ) {          /** Serial comms may cause writes to be missed?? **/
+          cerberus.poke(addr, data);
         }
         chkA += data;
         chkB += chkA;
@@ -538,7 +403,7 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     #endif
     Serial.print(nextWord);
     Serial.print(' ');
-    Serial.println((uint16_t)((chkA << 8) | chkB), HEX);
+    Serial.println((unsigned int)((chkA << 8) | chkB), HEX);
     
   /** LIST ***********************************************************************************/
   } else if (nextWord == F("list")) {     /** Lists contents of memory in compact format **/
@@ -553,34 +418,26 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
   /** TESTMEM ********************************************************************************/
   } else if (nextWord == F("testmem")) {  /** Checks whether all four memories can be written to and read from **/
     cls();
-    testMem();
+    cerberus.testMemory();
     cprintStatus(STATUS_READY);
   /** 6502 ***********************************************************************************/
   } else if (nextWord == F("6502")) {     /** Switches to 6502 mode **/
-    mode = false;
-    EEPROM.write(config_eeprom_address_mode, 0);
-    digitalWrite(CPUSLC, LOW);            /** Tell CAT of the new mode **/
+	cerberus.setMode(0);
     cprintStatus(STATUS_READY);
   /** Z80 ***********************************************************************************/
   } else if (nextWord == F("z80")) {      /** Switches to Z80 mode **/
-    mode = true;
-    EEPROM.write(config_eeprom_address_mode, 1);
-    digitalWrite(CPUSLC, HIGH);           /** Tell CAT of the new mode **/
+	cerberus.setMode(1);
     cprintStatus(STATUS_READY);
   /** RESET *********************************************************************************/
   } else if (nextWord == F("reset")) {
-    resetFunc();						  /** This resets CAT and, therefore, the CPUs too **/
+    cerberus.reset();				      /** This resets CAT and, therefore, the CPUs too **/
   /** FAST **********************************************************************************/
   } else if (nextWord == F("fast")) {     /** Sets CPU clock at 8 MHz **/
-    digitalWrite(CPUSPD, HIGH);
-    fast = true;
-    EEPROM.write(config_eeprom_address_fast, 1);
+	cerberus.setFast(1);
 	cprintStatus(STATUS_READY);
   /** SLOW **********************************************************************************/
   } else if (nextWord == F("slow")) {     /** Sets CPU clock at 4 MHz **/
-    digitalWrite(CPUSPD, LOW);
-    fast = false;
-    EEPROM.write(config_eeprom_address_fast, 0);
+	cerberus.setFast(0);
     cprintStatus(STATUS_READY);
   /** DIR ***********************************************************************************/
   } else if (nextWord == F("dir")) {      /** Lists files on uSD card **/
@@ -600,12 +457,14 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     runCode();
   /** SHORTCUTS FOR BASIC *******************************************************************/
   } else if (nextWord == F("basic6502")) {
-    mode = false;
+    cerberus.mode = false;
+	cerberus.cls();
     digitalWrite(CPUSLC, LOW);
     catLoad("basic65.bin","", false); 
     runCode();
   } else if (nextWord == F("basicz80")) {
-    mode = true;
+    cerberus.mode = true;
+	cerberus.cls();
     digitalWrite(CPUSLC, HIGH);
     catLoad("basicz80.bin","", false); 
     runCode();	
@@ -627,7 +486,7 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
     cprintStatus(STATUS_POWER);
   /** ALL OTHER CASES ***********************************************************************/
   } else cprintStatus(STATUS_UNKNOWN_COMMAND);
-  if (!cpurunning) {
+  if (!cerberus.cpuRunning) {
     storePreviousLine();
     clearEditLine();                   /** Reset edit line **/
   }
@@ -635,8 +494,8 @@ void enter() {  /** Called when the user presses ENTER, unless a CPU program is 
 
 String getNextWord(bool fromTheBeginning) {
   /** A very simple parser that returns the next word in the edit line **/
-  static byte initialPosition;    /** Start parsing from this point in the edit line **/
-  byte i, j, k;                   /** General-purpose indices **/
+  static byte  initialPosition;    /** Start parsing from this point in the edit line **/
+  byte  i, j, k;                   /** General-purpose indices **/
   if (fromTheBeginning) initialPosition = 1; /** Starting from the beginning of the edit line **/
   i = initialPosition;            /** Otherwise, continuing on from where we left off in previous call **/
   while ((editLine[i] == 32) || (editLine[i] == 44)) i++; /** Ignore leading spaces or commas **/
@@ -651,33 +510,31 @@ String getNextWord(bool fromTheBeginning) {
 }
 
 void help() {
-  cls();
-  #if config_board == 0
-  cprintString(3, 2,  F("The Byte Attic's CERBERUS 2080 (tm)"));
-  #else
-  cprintString(3, 2,  F("The Byte Attic's CERBERUS 2100 (tm)"));
-  #endif
-  cprintString(3, 3,  F("        AVAILABLE COMMANDS:"));
-  cprintString(3, 4,  F(" (All numbers must be hexadecimal)"));
-  cprintString(3, 6,  F("0xADDR BYTE: Writes BYTE at ADDR"));
-  cprintString(3, 7,  F("list ADDR: Lists memory from ADDR"));
-  cprintString(3, 8,  F("cls: Clears the screen"));
-  cprintString(3, 9,  F("testmem: Reads/writes to memories"));
-  cprintString(3, 10, F("6502: Switches to 6502 CPU mode"));
-  cprintString(3, 11, F("z80: Switches to Z80 CPU mode"));
-  cprintString(3, 12, F("fast: Switches to 8MHz mode"));
-  cprintString(3, 13, F("slow: Switches to 4MHz mode"));
-  cprintString(3, 14, F("reset: Resets the system"));
-  cprintString(3, 15, F("dir: Lists files on uSD card"));
-  cprintString(3, 16, F("del FILE: Deletes FILE"));
-  cprintString(3, 17, F("load FILE ADDR: Loads FILE at ADDR"));
-  cprintString(3, 18, F("save ADDR1 ADDR2 FILE: Saves memory"));
-  cprintString(5, 19, F("from ADDR1 to ADDR2 to FILE"));
-  cprintString(3, 20, F("run: Executes code in memory"));
-  cprintString(3, 21, F("move ADDR1 ADDR2 ADDR3: Moves bytes"));
-  cprintString(5, 22, F("between ADDR1 & ADDR2 to ADDR3 on"));
-  cprintString(3, 23, F("help / ?: Shows this help screen"));
-  cprintString(3, 24, F("ESC key: Quits CPU program"));
+	byte x = 3;
+	byte y = 4;
+	byte b;
+	
+	cls();
+	cprintString(3, 2,  F("Commands:"));
+
+  	if(SD.exists(helpFilename)) {
+    	File f = SD.open(helpFilename);		// Open the help file
+    	if (f) {
+			while(f.available()) {
+				b = f.read();
+				if(b >= 32) {
+					cprintChar(x++, y, b);
+				}
+				if(b == 0x0A) {
+					x = 3;
+					y++;
+				}
+			}
+      		f.close();
+    	}
+  	}
+	cprintString(3, y++, F("help / ?: Shows this help screen"));
+	cprintString(3, y, F("ESC key: Quits CPU program"));
 }
 
 void binMove(String startAddr, String endAddr, String destAddr) {
@@ -696,7 +553,7 @@ void binMove(String startAddr, String endAddr, String destAddr) {
         else if ((destination <= finish) && (destination >= start)) cprintStatus(STATUS_ADDRESS_ERROR); /** Destination cannot be within original range **/  
         else {
           for (i = start; i <= finish; i++) {
-            cpoke(destination, cpeek(i));
+            cerberus.poke(destination, cerberus.peek(i));
             destination++;
           }
           cprintStatus(STATUS_READY);
@@ -706,132 +563,88 @@ void binMove(String startAddr, String endAddr, String destAddr) {
   }
 }
 
+// Lists the contents of memory from the given address, in a compact format 
+//
 void list(String address) {
-  /** Lists the contents of memory from the given address, in a compact format **/
-  byte i, j;                      /** Just counters **/
-  unsigned int addr;              /** Memory address **/
+  byte  i, j;                      // Just counters 
+  unsigned int addr;             	 // Memory address
   if (address == "") addr = 0;
   else addr = strtol(address.c_str(), NULL, 16); /** Convert hexadecimal address string to unsigned int **/
   for (i = 2; i < 25; i++) {
     cprintString(3, i, "0x");
     cprintString(5, i, String(addr, HEX));
     for (j = 0; j < 8; j++) {
-      cprintString(12+(j*3), i, String(cpeek(addr++), HEX)); /** Print bytes in HEX **/
+      cprintString(12+(j*3), i, String(cerberus.peek(addr++), HEX)); /** Print bytes in HEX **/
     }
   }
 }
 
 void runCode() {
-  byte runL = config_code_start & 0xFF;
-  byte runH = config_code_start >> 8;
-
-  ccls();
-  /** REMEMBER:                           **/
-  /** Byte at config_outbox_flag is the new mail flag **/
-  /** Byte at config_outbox_data is the mail box      **/
-  cpoke(config_outbox_flag, 0x00);	/** Reset outbox mail flag	**/
-  cpoke(config_outbox_data, 0x00);	/** Reset outbox mail data	**/
-  cpoke(config_inbox_flag, 0x00);	/** Reset inbox mail flag	**/
-  if (!mode) {            /** We are in 6502 mode **/
-    /** Non-maskable interrupt vector points to 0xFCB0, just after video area **/
-    cpoke(0xFFFA, 0xB0);
-    cpoke(0xFFFB, 0xFC);
-    /** The interrupt service routine simply returns **/
-    // FCB0        RTI             40
-    cpoke(0xFCB0, 0x40);
-    /** Set reset vector to config_code_start, the beginning of the code area **/
-    cpoke(0xFFFC, runL);
-    cpoke(0xFFFD, runH);
-  } else {                /** We are in Z80 mode **/
-    /** The NMI service routine of the Z80 is at 0x0066 **/
-    /** It simply returns **/
-    // 0066   ED 45                  RETN 
-    cpoke(0x0066, 0xED);
-    cpoke(0x0067, 0x45);
-    /** The Z80 fetches the first instruction from 0x0000, so put a jump to the code area there **/
-    // 0000   C3 ll hh               JP   config_code_start
-	#if config_code_start != 0x0000
-    cpoke(0x0000, 0xC3);
-    cpoke(0x0001, runL);
-    cpoke(0x0002, runH);
-	#endif
-  }
-  cpurunning = true;
-  digitalWrite(CPURST, HIGH); /** Reset the CPU **/
-  digitalWrite(CPUGO, HIGH);  /** Enable CPU buses and clock **/
-  delay(50);
-  digitalWrite(CPURST, LOW);  /** CPU should now initialize and then go to its reset vector **/
-  #if config_enable_nmi == 1
-  Timer1.initialize(20000);
-  Timer1.attachInterrupt(cpuInterrupt); /** Interrupt every 0.02 seconds - 50Hz **/
-  #endif
+  cerberus.cls();
+  cerberus.runCode();
 }
 
 void stopCode() {
-    cpurunning = false;         /** Reset this flag **/
-    Timer1.detachInterrupt();
-    digitalWrite(CPURST, HIGH); /** Reset the CPU to bring its output signals back to original states **/ 
-    digitalWrite(CPUGO, LOW);   /** Tristate its buses to high-Z **/
-    delay(50);                   /** Give it some time **/
-    digitalWrite(CPURST, LOW);  /** Finish reset cycle **/
-
-    load("chardefs.bin", 0xf000);/** Reset the character definitions in case the CPU changed them **/
-    ccls();                     /** Clear screen completely **/
-    cprintFrames();             /** Reprint the wire frame in case the CPU code messed with it **/
+	cerberus.stopCode();
+    load("chardefs.bin", 0xf000);		// Reset the character definitions in case the CPU changed them 
+    cerberus.cls();                     // Clear screen completely 
+    cprintFrames();             		// Reprint the wire frame in case the CPU code messed with it
     cprintBanner();
-    cprintStatus(STATUS_DEFAULT);            /** Update status bar **/
-    clearEditLine();            /** Clear and display the edit line **/
+    cprintStatus(STATUS_DEFAULT);		// Update status bar
+    clearEditLine();            		// Clear and display the edit line 
 }
 
+// Lists the files in the root directory of uSD card, if available
+//
 void dir() {
-  /** Lists the files in the root directory of uSD card, if available **/
-  byte y = 2;                     /** Screen line **/
-  byte x = 0;                     /** Screen column **/
-  File root;                      /** Root directory of uSD card **/
-  File entry;                     /** A file on the uSD card **/
-  cls();
-  root = SD.open("/");            /** Go to the root directory of uSD card **/
-  while (true) {
-    entry = root.openNextFile();  /** Open next file **/
-    if (!entry) {                 /** No more files on the uSD card **/
-      root.close();               /** Close root directory **/
-      cprintStatus(STATUS_READY);            /** Announce completion **/
-      break;                      /** Get out of this otherwise infinite while() loop **/
-    }
-    cprintString(3, y, entry.name());
-    cprintString(20, y, String(entry.size(), DEC));
-    entry.close();                /** Close file as soon as it is no longer needed **/
-    if (y < 24) y++;              /** Go to the next screen line **/
-    else {
-      cprintStatus(STATUS_SCROLL_PROMPT);            /** End of screen has been reached, needs to scrow down **/
-      for (x = 2; x < 40; x++) cprintChar(x, 29, ' '); /** Hide editline while waiting for key press **/
-      while (!keyboard.available());/** Wait for a key to be pressed **/
-      if (keyboard.read() == PS2_ESC) { /** If the user pressed ESC, break and exit **/
-        tone(SOUND, 750, 5);      /** Clicking sound for auditive feedback to key press **/
-        root.close();             /** Close the directory before exiting **/
-        cprintStatus(STATUS_READY);
-        break;
-      } else {
-        tone(SOUND, 750, 5);      /** Clicking sound for auditive feedback to key press **/
-        cls();                    /** Clear the screen and... **/
-        y = 2;                    /** ...go back tot he top of the screen **/
-      }
-    }
-  }
+	byte  y = 2;                     	// Screen line 
+	byte  x = 0;                     	// Screen column 
+	File root;                      	// Root directory of uSD card 
+	File entry;                     	// A file on the uSD card 
+	cls();
+	root = SD.open("/");            	// Go to the root directory of uSD card 
+	while (true) {
+		entry = root.openNextFile();  	// Open next file
+		if (!entry) {                 	// No more files on the uSD card
+		  root.close();               	// Close root directory
+		  cprintStatus(STATUS_READY);	// Announce completion 
+		  break;                      	// Get out of this otherwise infinite while() loop 
+		}
+		cprintString(3, y, entry.name());
+		cprintString(20, y, String(entry.size(), DEC));
+		entry.close();                	// Close file as soon as it is no longer needed 
+		if (y < 24) y++;              	// Go to the next screen line 
+		else {
+	    	cprintStatus(STATUS_SCROLL_PROMPT);            		// End of screen has been reached, needs to scroll down 
+	    	for (x = 2; x < 40; x++) cprintChar(x, 29, ' ');	// Hide editline while waiting for key press 
+	    	while (!keyboard.available());						// Wait for a key to be pressed 
+	    	if (keyboard.read() == PS2_ESC) {					// If the user pressed ESC, break and exit 
+	      		tone(SOUND, 750, 5);      						// Clicking sound for auditive feedback to key press 
+	      		root.close();             						// Close the directory before exiting 
+	      		cprintStatus(STATUS_READY);
+	      		break;
+	    	} else {
+	      		tone(SOUND, 750, 5);      						// Clicking sound for auditive feedback to key press 
+	      		cls();                    						// Clear the screen and... 
+	      		y = 2;                    						// ...go back to the top of the screen 
+	    	}
+	  	}
+	}
 }
 
 void catDelFile(String filename) {
 	cprintStatus(delFile(filename));
 }
 
+// Deletes a file from the uSD card 
+//
 int delFile(String filename) {
 	int status = STATUS_DEFAULT;
-  	/** Deletes a file from the uSD card **/
   	if (!SD.exists(filename)) {
-		status = STATUS_NO_FILE;		/** The file doesn't exist, so stop with error **/
+		status = STATUS_NO_FILE;								// The file doesn't exist, so stop with error 
 	}
   	else {
-	    SD.remove(filename);          /** Delete the file **/
+	    SD.remove(filename);          							// Delete the file
 	    status = STATUS_READY;
   	}
 	return status;
@@ -842,7 +655,7 @@ void catSave(String filename, String startAddress, String endAddress) {
 	unsigned int endAddr;
 	int status = STATUS_DEFAULT;
    	if (startAddress == "") {
-		status = STATUS_MISSING_OPERAND;               /** Missing operand **/
+		status = STATUS_MISSING_OPERAND; 
 	}
 	else {
 		startAddr = strtol(startAddress.c_str(), NULL, 16);
@@ -857,31 +670,32 @@ void catSave(String filename, String startAddress, String endAddress) {
 	cprintStatus(status);
 }
 
+// Saves contents of a region of memory to a file on uSD card
+//
 int save(String filename, unsigned int startAddress, unsigned int endAddress) {
-  	/** Saves contents of a region of memory to a file on uSD card **/
 	int status = STATUS_DEFAULT;
-  	unsigned int i;                                     /** Memory address counter **/
-  	byte data;                                          /** Data from memory **/
-  	File dataFile;                                      /** File to be created and written to **/
-	if (endAddress < startAddress) {
-		status = STATUS_ADDRESS_ERROR;            		/** Invalid address range **/
-	}
-	else {
-		if (filename == "") {
-			status = STATUS_MISSING_OPERAND;          	/** Missing the file's name **/
-		}
-		else {
-			if (SD.exists(filename)) {
-				status = STATUS_FILE_EXISTS;   				/** The file already exists, so stop with error **/
+  	unsigned int i;                                     		// Memory address counter
+  	byte data;                                          	// Data from memory
+  	File dataFile;                                      	// File to be created and written to
+	if (endAddress < startAddress) {	
+		status = STATUS_ADDRESS_ERROR;            			// Invalid address range
+	}	
+	else {	
+		if (filename == "") {	
+			status = STATUS_MISSING_OPERAND;          		// Missing the file's name 
+		}	
+		else {	
+			if (SD.exists(filename)) {	
+				status = STATUS_FILE_EXISTS;   				// The file already exists, so stop with error 
 			}
 			else {
-				dataFile = SD.open(filename, FILE_WRITE); /** Try to create the file **/
+				dataFile = SD.open(filename, FILE_WRITE);	// Try to create the file
 				if (!dataFile) {
-					status = STATUS_CANNOT_OPEN;           /** Cannot create the file **/
+					status = STATUS_CANNOT_OPEN;           	// Cannot create the file 
 				}
-				else {                                    /** Now we can finally write into the created file **/
+				else {                                    	// Now we can finally write into the created file 
 					for(i = startAddress; i <= endAddress; i++) {
-						data = cpeek(i);
+						data = cerberus.peek(i);
 						dataFile.write(data);
 					}
 					dataFile.close();
@@ -897,10 +711,10 @@ void catLoad(String filename, String startAddress, bool silent) {
 	unsigned int startAddr;
 	int status = STATUS_DEFAULT;
 	if (startAddress == "") {
-		startAddr = config_code_start;	/** If not otherwise specified, load file into start of code area **/
+		startAddr = ptr_code_start;							// If not otherwise specified, load file into start of code area 
 	}
 	else {
-		startAddr = strtol(startAddress.c_str(), NULL, 16);	/** Convert address string to hexadecimal number **/
+		startAddr = strtol(startAddress.c_str(), NULL, 16);	// Convert address string to hexadecimal number 
 	}
 	status = load(filename, startAddr);
 	if(!silent) {
@@ -908,27 +722,28 @@ void catLoad(String filename, String startAddress, bool silent) {
 	}
 }
 
+// Loads a binary file from the uSD card into memory
+//
 int load(String filename, unsigned int startAddr) {
-  /** Loads a binary file from the uSD card into memory **/
-  File dataFile;                                /** File for reading from on SD Card, if present **/
-  unsigned int addr = startAddr;                /** Address where to load the file into memory **/
+  File dataFile;                                			// File for reading from on SD Card, if present
+  unsigned int addr = startAddr;         		       			// Address where to load the file into memory
   int status = STATUS_DEFAULT;
   if (filename == "") {
 	  status = STATUS_MISSING_OPERAND;
   }
   else {
     if (!SD.exists(filename)) {
-		status = STATUS_NO_FILE;				/** The file does not exist, so stop with error **/
+		status = STATUS_NO_FILE;							// The file does not exist, so stop with error 
 	} 
     else {
-      	dataFile = SD.open(filename);           /** Open the binary file **/
+      	dataFile = SD.open(filename);           			// Open the binary file 
       	if (!dataFile) {
-			status = STATUS_CANNOT_OPEN; 		/** Cannot open the file **/
+			status = STATUS_CANNOT_OPEN; 					// Cannot open the file 
 	  	}
       	else {
-        	while (dataFile.available()) {		/** While there is data to be read... **/
-          	cpoke(addr++, dataFile.read());     /** Read data from file and store it in memory **/
-          	if (addr == 0) {                    /** Break if address wraps around to the start of memory **/
+        	while (dataFile.available()) {					// While there is data to be read..
+          	cerberus.poke(addr++, byte(dataFile.read()));	// Read data from file and store it in memory 
+          	if (addr == 0) {                    			// Break if address wraps around to the start of memory 
             	dataFile.close();
             	break;
           	}
@@ -946,8 +761,9 @@ void cprintEditLine () {
   	for (i = 0; i < 38; i++) cprintChar(i + 2, 29, editLine[i]);
 }
 
+// Resets the contents of edit line and reprints it 
+//
 void clearEditLine() {
-  	/** Resets the contents of edit line and reprints it **/
   	byte i;
   	editLine[0] = 62;
   	editLine[1] = 0;
@@ -956,12 +772,16 @@ void clearEditLine() {
   	cprintEditLine();
 }
 
+// Store edit line just executed
+//
 void storePreviousLine() {
-	for (byte i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
+	for (byte i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; 
 }
 
+// Print out a status from a code
+// REMEMBER: The macro "F()" simply tells the compiler to put the string in code memory, so to save dynamic memory 
+//
 void cprintStatus(byte status) {
-  	/** REMEMBER: The macro "F()" simply tells the compiler to put the string in code memory, so to save dynamic memory **/
   	switch( status ) {
     	case STATUS_BOOT:
       		center(F("Here we go! Hang on..."));
@@ -1003,10 +823,8 @@ void cprintStatus(byte status) {
 			#else
       		cprintString(2, 27, F("      CERBERUS 2100: "));
 			#endif
-      		if (mode) cprintString(23, 27, F(" Z80, "));
-      		else cprintString(23, 27, F("6502, "));
-      		if (fast) cprintString(29, 27, F("8 MHz"));
-      		else cprintString(29, 27, F("4 MHz"));
+      		cprintString(23, 27, cerberus.mode ? F(" Z80, ") : F("6502, "));
+      		cprintString(29, 27, cerberus.fast ? F("8 MHz") : F("4 MHz"));
       		cprintString(34, 27, F("     "));
   	}
 }
@@ -1017,22 +835,20 @@ void center(String text) {
 }
 
 void playJingle() {
-  	delay(500);           /** Wait for possible preceding keyboard click to end **/
-  	tone(SOUND, 261, 50);
-  	delay(150);
-  	tone(SOUND, 277, 50);
-  	delay(150);
-  	tone(SOUND, 261, 50);
-  	delay(150);
-  	tone(SOUND, 349, 500);
-  	delay(250);
-  	tone(SOUND, 261, 50);
-  	delay(150);
-  	tone(SOUND, 349, 900);
+	unsigned int i;
+	unsigned int f[6] = { 261, 277, 261, 349, 261, 349 };
+	unsigned int d[6] = {  50,  50,  50, 500,  50, 900 };
+
+	delay(350);	// Wait for possible preceding keyboard click to end
+	for(i = 0; i < 6; i++) {
+		delay(150);
+		tone(SOUND, f[i], d[i]);
+	}
 }
 
+// This clears the screen only WITHIN the main frame
+//
 void cls() {
-  	/** This clears the screen only WITHIN the main frame **/
   	unsigned int y;
   	for (y = 2; y <= 25; y++) {
     	clearLine(y);
@@ -1046,45 +862,40 @@ void clearLine(byte y) {
 	}
 }
 
-void ccls() {
-  	/** This clears the entire screen **/
-  	unsigned int x;
-  	for (x = 0; x < 1200; x++) {
-	    cpoke(0xF800 + x, 32);        /** Video memory addresses start at 0XF800 **/
-	}
-}
-
 void cprintFrames() {
   	unsigned int x;
   	unsigned int y;
-  	/** First print horizontal bars **/
-  	for (x = 2; x <= 39; x++) {
+  	
+  	for (x = 2; x <= 39; x++) {	// First print horizontal bars
 	    cprintChar(x, 1, 3);
 	    cprintChar(x, 30, 131);
 	    cprintChar(x, 26, 3);
   	}
-  	/** Now print vertical bars **/
-  	for (y = 1; y <= 30; y++) {
+
+  	for (y = 1; y <= 30; y++) {	// Now print vertical bars
 	    cprintChar(1, y, 133);
 	    cprintChar(40, y, 5);
   	}
 }
 
+// Load the CERBERUS icon image on the screen
+//
 void cprintBanner() {
- 	/** Load the CERBERUS icon image on the screen ************/
-  	int inChar;
-  	if(!SD.exists("cerbicon.img")) {
-		tone(SOUND, 50, 150); /** Tone out an error if file is not available **/
+	String	tokenText;
+  	byte 	inChar;
+
+  	if(!SD.exists(bannerFilename)) {
+		tone(SOUND, 50, 150); 						// Tone out an error if file is not available
 	}
-  	else {
-    	File dataFile2 = SD.open("cerbicon.img"); /** Open the image file **/
+  	else {		
+    	File dataFile2 = SD.open(bannerFilename);	// Open the image file
     	if (!dataFile2) {
-			tone(SOUND, 50, 150);     /** Tone out an error if file can't be opened  **/
+			tone(SOUND, 50, 150);     				// Tone out an error if file can't be opened 
 		}
     	else {
       		for (byte y = 2; y <= 25; y++) {
         		for (byte x = 2; x <= 39; x++) {
-	          		String tokenText = "";
+	          		tokenText = "";
           			while (isDigit(inChar = dataFile2.read())) {
 						tokenText += char(inChar);
 					}
@@ -1106,116 +917,6 @@ void cprintString(byte x, byte y, String text) {
 }
 
 void cprintChar(byte x, byte y, byte token) {
-  	/** First, calculate address **/
-  	unsigned int address = 0xF800 + ((y - 1) * 40) + (x - 1); /** Video memory addresses start at 0XF800 **/
-  	cpoke(address, token);
-}
-
-void testMem() {
-  	/** Tests that all four memories are accessible for reading and writing **/
-  	unsigned int x;
-  	byte i = 0;
-    for (x = 0; x < 874; x++) {
-    	cpoke(x, i);                                           /** Write to low memory **/
-    	cpoke(0x8000 + x, cpeek(x));                           /** Read from low memory and write to high memory **/
-    	cpoke(addressTranslate(0xF800 + x), cpeek(0x8000 + x));/** Read from high mem, write to VMEM, read from character mem **/
-    	if (i < 255) i++;
-    	else i = 0;
-  	}
-}
-
-unsigned int addressTranslate (unsigned int virtualAddress) {
-  	byte numberVirtualRows;
-  	numberVirtualRows = (virtualAddress - 0xF800) / 38;
-  	return((virtualAddress + 43) + (2 * (numberVirtualRows - 1)));
-}
-
-void resetCPUs() {            	/** Self-explanatory **/
-  	digitalWrite(CPURST, LOW);
-  	digitalWrite(CPUSLC, LOW);  /** First reset the 6502 **/
-  	digitalWrite(CPUGO, HIGH);
-  	delay(50);
-  	digitalWrite(CPURST, HIGH);
-  	digitalWrite(CPUGO, LOW);
-  	delay(50);
-  	digitalWrite(CPURST, LOW);
-  	digitalWrite(CPUSLC, HIGH); /** Now reset the Z80 **/
-  	digitalWrite(CPUGO, HIGH);
-  	delay(50);
-  	digitalWrite(CPURST, HIGH);
-  	digitalWrite(CPUGO, LOW);
-  	delay(50);
-  	digitalWrite(CPURST, LOW);
-  	if (!mode) {
-		  digitalWrite(CPUSLC, LOW);
-	}
-}
-
-byte readShiftRegister() {
-  	byte data;
-  	data = shiftIn(SI, SC, MSBFIRST);
-  	return data;
-}
-
-void setShiftRegister(unsigned int address, byte data) { 
-  	shiftOut(SO, SC, LSBFIRST, address);      /** First 8 bits of address **/
-  	shiftOut(SO, SC, LSBFIRST, address >> 8); /** Then the remaining 8 bits **/
-  	shiftOut(SO, SC, LSBFIRST, data);         /** Finally, a byte of data **/
-}
-
-void cpoke(unsigned int address, byte data) {
-  	setShiftRegister(address, data);
-  	digitalWrite(AOE, HIGH);      /** Enable address onto bus **/
-  	digitalWrite(RW, LOW);        /** Begin writing **/
-  	digitalWrite(RW, HIGH);       /** Finish up**/
-  	digitalWrite(AOE, LOW);
-}
-
-void cpokeW(unsigned int address, unsigned int data) {
-	cpoke(address, data & 0xFF);
-	cpoke(address + 1, (data >> 8) & 0xFF);
-}
-
-void cpokeL(unsigned int address, unsigned long data) {
-	cpoke(address, data & 0xFF);
-	cpoke(address + 1, (data >> 8) & 0xFF);
-	cpoke(address + 2, (data >> 16) & 0xFF);
-	cpoke(address + 3, (data >> 24) & 0xFF);
-}
-
-boolean cpokeStr(unsigned int address, String text) {
-	unsigned int i;
-	for(i = 0; i < text.length(); i++) {
-		cpoke(address + i, text[i]);
-	}
-	cpoke(address + i, 0);
-	return true;
-}
-
-byte cpeek(unsigned int address) {
-  	byte data = 0;
-  	setShiftRegister(address, data);
-  	digitalWrite(AOE, HIGH);      /** Enable address onto us **/
-  	/** This time we do NOT enable the data outputs of the shift register, as we are reading **/
-  	digitalWrite(LD, HIGH);       /** Prepare to latch byte from data bus into shift register **/
-  	digitalWrite(SC, HIGH);       /** Now the clock tics, so the byte is actually latched **/
-  	digitalWrite(LD, LOW);
-  	digitalWrite(AOE, LOW);
-  	data = readShiftRegister();
-  	return data;
-}
-
-unsigned int cpeekW(unsigned int address) {
-	return cpeek(address) + (256 * cpeek(address+1));
-}
-
-boolean cpeekStr(unsigned int address, byte * dest, int max) {
-	unsigned int i;
-	byte c;
-	for(i = 0; i < max; i++) {
-		c = cpeek(address + i);
-		dest[i] = c;
-		if(c == 0) return true;
-	}
-	return false;
+  	unsigned int address = 0xF800 + ((y - 1) * 40) + (x - 1); // Video memory addresses start at 0XF800
+  	cerberus.poke(address, token);
 }
