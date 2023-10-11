@@ -10,16 +10,13 @@
 #define config_default_mode 1			// 0: 6502, 1: Z80
 #define config_default_fast 1			// 0: 4mhz, 1: 8mhz
 
-#define	sys_vars 0xEFF0					// Base of system variables shared between CAT and CPUs
-
-#define ptr_outbox_flag (sys_vars+0x0)	// Outbox flag memory location (byte)
-#define ptr_outbox_data (sys_vars+0x1)	// Outbox data memory location (byte)
-#define ptr_inbox_flag (sys_vars+0x2)	// Inbox flag memory location (byte)
-#define	ptr_inbox_data (sys_vars+0x3)	// Inbox data memory location (word)
-#define ptr_xbus_data (sys_vars+0xE)	// Expansion bus data memory location (byte)
-#define ptr_xbus_flag (sys_vars+0xF)	// Expansion bus flag memory location (byte)
-
-#define ptr_code_start 0x0200			// Default start location of code
+#define ptr_outbox_flag 0x0200			// Outbox flag memory location (byte)
+#define ptr_outbox_data 0x0201			// Outbox data memory location (byte)
+#define ptr_inbox_flag	0x0202			// Inbox flag memory location (byte)
+#define	ptr_inbox_data	0x0203			// Inbox data memory location (word)
+#define ptr_code_start 	0x0205			// Default start location of code
+#define ptr_xbus_data	0xEFFE			// Expansion bus data memory location (byte)
+#define ptr_xbus_flag	0xEFFF			// Expansion bus flag memory location (byte)
 
 #define config_eeprom_address_mode 0	// First EEPROM location
 #define config_eeprom_address_fast 1	// Second EEPROM location
