@@ -4,7 +4,7 @@
 ; Author:	(C) Copyright  R.T.Russell  1984
 ; Modified By:	Dean Belfield
 ; Created:	02/05/2021
-; Last Updated:	11/07/2021
+; Last Updated:	11/10/2023
 ;
 ; Modinfo:
 ; 07/05/1984:	Version 2.3
@@ -13,6 +13,7 @@
 ; 30/09/1992:	INSTR bug fixed
 ; 02/05/2021:	Modified by Dean Belfield to assemble with SJASMPLUS
 ; 09/08/2021:	GET and GETS modified to also read characters from screen
+; 11/10/2023:	Fixed bug in CONS
 
 ;
 ;BINARY FLOATING POINT REPRESENTATION:
@@ -456,7 +457,7 @@ NOS1:			INC     IY
 @CONS:			LD      DE,ACCS
 CONS3:			LD      A,(IY)
 			INC     IY
-			CP      34		;ASCII ""
+			CP      34		;ASCII "
 			JR      Z,CONS2
 CONS1:			LD      (DE),A
 			INC     E
@@ -466,7 +467,7 @@ CONS1:			LD      (DE),A
 ERROR0:			JP      ERROR           ;"Missing """
 ;
 CONS2:			LD      A,(IY)
-			CP      0x34		;ASCII "
+			CP      34		;ASCII "
 			INC     IY
 			JR      Z,CONS1
 			DEC     IY

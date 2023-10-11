@@ -3,10 +3,11 @@
 ;		Cerberus 2080 Initialisation
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	10/08/2021
+; Last Updated:	11/10/2023
 ;
 ; Modinfo:
 ; 10/08/2021:	Initialise and flash the cursor
+; 11/10/2023:	Removed Cerberus prompt on boot
 
 			MODULE	CERBERUS_INIT
 
@@ -21,10 +22,6 @@ System:			DI					; Disable the maskable interrupts
 			LD	(0x0066), A 			; Store at NMI vector address
 			LD	(0x0067), HL
 
-			CALL    TELL
-			DEFM	"Cerberus 2080 Version ", BUILD_VERSION, "\n\r"
-			DEFM	"\n\r"
-			DEFB    0
 			JP	MAIN.COLD
 ;
 ; Initialise the RAM

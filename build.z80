@@ -2,15 +2,16 @@
 ; Title:	BBC Basic for Cerberus 2080 - Main build file
 ; Author:	Dean Belfield
 ; Created:	31/07/2021
-; Last Updated:	23/11/2021
+; Last Updated:	11/10/2023
 ;
 ; Modinfo:
 ; 10/08/2021:	Added macros.z80, changed mailbox labels
 ; 12/08/2021:	Added cerberus_debug.z80 and cerberus_dos.z80
 ; 13/08/2021:	Added cerberus_sound.z80
 ; 23/11/2021:	Increased BUILD_VERSION to 0.04
+; 11/10/2023:	Updated to run on Cerberus 2100
 
-			DEFINE BUILD_VERSION "0.04"	; Build version
+			DEFINE BUILD_VERSION "0.05"	; Build version
 ;
 ; Memory map
 ;
@@ -19,8 +20,9 @@ Inbox_Data:		EQU 	0x0201
 Outbox_Flag:		EQU	0x0202			; Data sent to the ATMega328p
 Outbox_Data:		EQU	0x0203
 Code_Start:		EQU	0x0205			; Code start
+
 RAM_Top:		EQU	0xEF00			; Top of usable RAM; must be on a page boundary
-Stack_Top:		EQU	0xF000			; Stack at top
+Stack_Top:		EQU	0xEFFE			; Stack at top
 Character_RAM:		EQU	0xF000
 Video_RAM:		EQU	0xF800		
 
