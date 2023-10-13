@@ -59,20 +59,6 @@
 
 #include "src/PS2Keyboard/PS2Keyboard.h"
 
-// And all the internal includes
-//
-#include "config.h"
-#include "hardware.h"
-
-// Now some stuff required by the libraries in use
-//
-const int	chipSelect = CS;
-const int	DataPin = KDAT;
-const int	IRQpin = KCLK;
-
-const char * bannerFilename = "cerbicon.img";
-const char * helpFilename = "help.txt";
-
 // Status constants
 //
 #define STATUS_DEFAULT 0
@@ -88,12 +74,28 @@ const char * helpFilename = "help.txt";
 #define STATUS_POWER 10
 #define STATUS_EOF 11
 
-volatile char editLine[38];					// Current edit line buffer
-volatile char previousEditLine[38];			// Previous edit line buffer (allows for repeating previous command)
+// And all the internal includes
+//
+#include "config.h"
+#include "hardware.h"
+#include "fileio.h"
+
+// Now some stuff required by the libraries in use
+//
+const int	chipSelect = CS;
+const int	DataPin = KDAT;
+const int	IRQpin = KCLK;
+
+const char * bannerFilename = "cerbicon.img";
+const char * helpFilename = "help.txt";
+
+char editLine[38];							// Current edit line buffer
+char previousEditLine[38];					// Previous edit line buffer (allows for repeating previous command)
 
 volatile byte pos = 1;						// Position in edit line currently occupied by cursor 
 
 File		cd;								// Used by BASIC directory commands
+FileIO		fileIO;							// All the FileIO stuff is in here
 PS2Keyboard	keyboard;
 Hardware	cerberus(config_board);
 
@@ -136,7 +138,7 @@ void setup() {
   	}
   	// Load character defs into memory
 	//
-  	if(load("chardefs.bin", 0xf000) != STATUS_READY) {
+  	if(fileIO.loadFile("chardefs.bin", 0xf000) != STATUS_READY) {
 		tone(SOUND, 50, 150);
 	}
 
@@ -202,7 +204,7 @@ void loop() {
     	else {
 	 	   switch(ascii) {
 	    		case PS2_ENTER:
-		    		enter();
+		    		exec(&editLine[1]);					// The first character is a ">"
 	    			break;
 	    		case PS2_UPARROW:
 		     	   	for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
@@ -316,7 +318,7 @@ void cmdSound(unsigned int address, bool blocking) {
 //
 int cmdDelFile(unsigned int address) {
 	cerberus.peekString(address, (byte *)editLine, 38);
-	return delFile((char *)editLine);	
+	return fileIO.deleteFile((char *)editLine);	
 }
 
 // Handle LOAD command from BASIC
@@ -325,7 +327,7 @@ int cmdLoad(unsigned int address) {
 	unsigned int startAddr = cerberus.peekWord(address);
 	unsigned int length = cerberus.peekWord(address + 2);
 	cerberus.peekString(address + 4, (byte *)editLine, 38);
-	return load((char *)editLine, startAddr);
+	return fileIO.loadFile((char *)editLine, startAddr);
 }
 
 // Handle SAVE command from BASIC
@@ -334,7 +336,7 @@ int cmdSave(unsigned int address) {
 	unsigned int startAddr = cerberus.peekWord(address);
 	unsigned int length = cerberus.peekWord(address + 2);
 	cerberus.peekString(address + 4, (byte *)editLine, 38);
-	return save((char *)editLine, startAddr, startAddr + length - 1);
+	return fileIO.saveFile((char *)editLine, startAddr, startAddr + length - 1);
 }
 
 // Handle CAT command from BASIC
@@ -357,156 +359,154 @@ int cmdCatEntry(unsigned int address) {				// Subsequent calls to this will read
 	return STATUS_READY;							// Return READY
 }
 
-/************************************************************************************************/
-void enter() {  /** Called when the user presses ENTER, unless a CPU program is being executed **/
-/************************************************************************************************/
-  unsigned int addr;                /** Memory addresses **/
-  byte data;                        /** A byte to be stored in memory **/
-  byte i;                           /** Just a counter **/
-  String nextWord, nextNextWord, nextNextNextWord; /** General-purpose strings **/
-  nextWord = getNextWord(true);     /** Get the first word in the edit line **/
-  nextWord.toLowerCase();           /** Ignore capitals **/
-  if( nextWord.length() == 0 ) {    /** Ignore empty line **/
-    Serial.println(F("OK"));
-    return;
-  }
-  /** MANUAL ENTRY OF OPCODES AND DATA INTO MEMORY *******************************************/
-  if ((nextWord.charAt(0) == '0') && (nextWord.charAt(1) == 'x')) { /** The user is entering data into memory **/
-    nextWord.remove(0,2);                       /** Removes the "0x" at the beginning of the string to keep only a HEX number **/
-    addr = strtol(nextWord.c_str(), NULL, 16);  /** Converts to HEX number type **/
-    nextNextWord = getNextWord(false);          /** Get next byte **/
-    byte chkA = 1;
-    byte chkB = 0;
-    while (nextNextWord != "") {                /** For as long as user has typed in a byte, store it **/
-      if(nextNextWord.charAt(0) != '#') {
-        data = strtol(nextNextWord.c_str(), NULL, 16);/** Converts to HEX number type **/
-        while( cerberus.peek(addr) != data ) {          /** Serial comms may cause writes to be missed?? **/
-          cerberus.poke(addr, data);
-        }
-        chkA += data;
-        chkB += chkA;
-        addr++;
-      }
-      else {
-        nextNextWord.remove(0,1);
-        addr = strtol(nextNextWord.c_str(), NULL, 16);
-        if( addr != ((chkA << 8) | chkB) ) {
-          cprintString(28, 26, nextWord);
-          tone(SOUND, 50, 50);
-        }
-      }
-      nextNextWord = getNextWord(false);  /** Get next byte **/
-    }
-    #if config_dev_mode == 0
-    cprintStatus(STATUS_READY);
-    cprintString(28, 27, nextWord);
-    #endif
-    Serial.print(nextWord);
-    Serial.print(' ');
-    Serial.println((unsigned int)((chkA << 8) | chkB), HEX);
-    
-  /** LIST ***********************************************************************************/
-  } else if (nextWord == F("list")) {     /** Lists contents of memory in compact format **/
-    cls();
-    nextWord = getNextWord(false);        /** Get address **/
-    list(nextWord);
-    cprintStatus(STATUS_READY);
-  /** CLS ************************************************************************************/
-  } else if (nextWord == F("cls")) {      /** Clear the main window **/
-    cls();
-    cprintStatus(STATUS_READY);
-  /** TESTMEM ********************************************************************************/
-  } else if (nextWord == F("testmem")) {  /** Checks whether all four memories can be written to and read from **/
-    cls();
-    cerberus.testMemory();
-    cprintStatus(STATUS_READY);
-  /** 6502 ***********************************************************************************/
-  } else if (nextWord == F("6502")) {     /** Switches to 6502 mode **/
-	cerberus.setMode(0);
-    cprintStatus(STATUS_READY);
-  /** Z80 ***********************************************************************************/
-  } else if (nextWord == F("z80")) {      /** Switches to Z80 mode **/
-	cerberus.setMode(1);
-    cprintStatus(STATUS_READY);
-  /** RESET *********************************************************************************/
-  } else if (nextWord == F("reset")) {
-    cerberus.reset();				      /** This resets CAT and, therefore, the CPUs too **/
-  /** FAST **********************************************************************************/
-  } else if (nextWord == F("fast")) {     /** Sets CPU clock at 8 MHz **/
-	cerberus.setFast(1);
-	cprintStatus(STATUS_READY);
-  /** SLOW **********************************************************************************/
-  } else if (nextWord == F("slow")) {     /** Sets CPU clock at 4 MHz **/
-	cerberus.setFast(0);
-    cprintStatus(STATUS_READY);
-  /** DIR ***********************************************************************************/
-  } else if (nextWord == F("dir")) {      /** Lists files on uSD card **/
-    dir();
-  /** DEL ***********************************************************************************/
-  } else if (nextWord == F("del")) {      /** Deletes a file on uSD card **/
-    nextWord = getNextWord(false);
-    catDelFile(nextWord);
-  /** LOAD **********************************************************************************/
-  } else if (nextWord == F("load")) {     /** Loads a binary file into memory, at specified location **/
-    nextWord = getNextWord(false);        /** Get the file name from the edit line **/
-    nextNextWord = getNextWord(false);    /** Get memory address **/
-    catLoad(nextWord, nextNextWord, false);
-  /** RUN ***********************************************************************************/
-  } else if (nextWord == F("run")) {      /** Runs the code in memory **/
-    for (i = 0; i < 38; i++) previousEditLine[i] = editLine[i]; /** Store edit line just executed **/
-    runCode();
-  /** SHORTCUTS FOR BASIC *******************************************************************/
-  } else if (nextWord == F("basic6502")) {
-    cerberus.mode = false;
-	cerberus.cls();
-    digitalWrite(CPUSLC, LOW);
-    catLoad("basic65.bin","", false); 
-    runCode();
-  } else if (nextWord == F("basicz80")) {
-    cerberus.mode = true;
-	cerberus.cls();
-    digitalWrite(CPUSLC, HIGH);
-    catLoad("basicz80.bin","", false); 
-    runCode();	
-  /** SAVE **********************************************************************************/
-  } else if (nextWord == F("save")) {
-    nextWord = getNextWord(false);						/** Start start address **/
-    nextNextWord = getNextWord(false);					/** End address **/
-    nextNextNextWord = getNextWord(false);				/** Filename **/
-    catSave(nextNextNextWord, nextWord, nextNextWord);
-  /** MOVE **********************************************************************************/
-  } else if (nextWord == F("move")) {
-    nextWord = getNextWord(false);
-    nextNextWord = getNextWord(false);
-    nextNextNextWord = getNextWord(false);
-    binMove(nextWord, nextNextWord, nextNextNextWord);
-  /** HELP **********************************************************************************/
-  } else if ((nextWord == F("help")) || (nextWord == F("?"))) {
-    help();
-    cprintStatus(STATUS_POWER);
-  /** ALL OTHER CASES ***********************************************************************/
-  } else cprintStatus(STATUS_UNKNOWN_COMMAND);
-  if (!cerberus.cpuRunning) {
-    storePreviousLine();
-    clearEditLine();                   /** Reset edit line **/
-  }
+// Get the next word from the command line
+//
+String getNextParam() {
+	return String(strtok(NULL, " "));
 }
 
-String getNextWord(bool fromTheBeginning) {
-  /** A very simple parser that returns the next word in the edit line **/
-  static byte  initialPosition;    /** Start parsing from this point in the edit line **/
-  byte  i, j, k;                   /** General-purpose indices **/
-  if (fromTheBeginning) initialPosition = 1; /** Starting from the beginning of the edit line **/
-  i = initialPosition;            /** Otherwise, continuing on from where we left off in previous call **/
-  while ((editLine[i] == 32) || (editLine[i] == 44)) i++; /** Ignore leading spaces or commas **/
-  j = i + 1;                      /** Now start indexing the next word proper **/
-  /** Find the end of the word, marked either by a space, a comma or the cursor **/
-  while ((editLine[j] != 32) && (editLine[j] != 44) && (editLine[j] != 0)) j++;
-  char nextWord[j - i + 1];       /** Create a buffer (the +1 is to make space for null-termination) **/
-  for (k = i; k < j; k++) nextWord[k - i] = editLine[k]; /** Transfer the word to the buffer **/
-  nextWord[j - i] = 0;            /** Null-termination **/
-  initialPosition = j;            /** Next time round, start from here, unless... **/
-  return (nextWord);              /** Return the contents of the buffer **/
+// Convert a hex string to a number
+//
+unsigned int fromHex(String s) {
+	return strtol(s.c_str(), NULL, 16);
+}
+
+// Execute a command
+// Parameters:
+// - buffer: Pointer to a zero terminated string that contains the command with arguments
+// Returns:
+//
+void exec(char * buffer) {
+	String			param;
+	unsigned int	addr;
+	byte 			data, chkA, chkB;
+
+	char *			ptr = buffer;
+
+	ptr = strtok(buffer, " ");
+	if(ptr != NULL) {
+		param = String(ptr);
+		param.toLowerCase();
+
+		if(param.startsWith("0x")) {
+			chkA = 1;
+			chkB = 0;
+			param.remove(0, 2);								// Strip the leading '0x' from the address
+			addr = fromHex(param);							// Convert the address string to an unsigned int
+			param = getNextParam();							// Get the next byte
+			while(param != "") {							// For as long as the user as entered bytes
+				if(param.charAt(0) != '#') {				// Check for the terminator
+					data = fromHex(param);					// Convert the byte string to a byte
+					while(cerberus.peek(addr) != data) {	// Retry until written; serial comms may cause writes to be missed?
+						cerberus.poke(addr, data);
+					}
+					chkA += data;							// Checksums
+					chkB += chkA;
+					addr ++;
+				}
+				else {
+					param.remove(0,1);						// Check the checksum
+					addr = fromHex(param);
+					if( addr != ((chkA << 8) | chkB) ) {
+						cprintString(28, 26, param);
+						tone(SOUND, 50, 50);
+					}
+				}
+				param = getNextParam();						// Fetch the next byte and repeat
+			}
+    		#if config_dev_mode == 0
+    		cprintStatus(STATUS_READY);
+    		cprintString(28, 27, param);
+    		#endif
+    		Serial.print(param);
+    		Serial.print(' ');
+    		Serial.println((unsigned int)((chkA << 8) | chkB), HEX);			
+		}
+  		else if (param == F("cls")) { 
+    		cls();
+    		cprintStatus(STATUS_READY);
+  		}
+		else if (param == F("6502")) { 
+			cerberus.setMode(0);
+    		cprintStatus(STATUS_READY);
+		}
+		else if (param == F("z80")) {
+			cerberus.setMode(1);
+    		cprintStatus(STATUS_READY);
+		}
+		else if (param == F("reset")) {
+    		cerberus.reset();				    	
+		}
+		else if (param == F("fast")) {     	
+			cerberus.setFast(1);
+			cprintStatus(STATUS_READY);
+		}
+		else if (param == F("slow")) {     	
+			cerberus.setFast(0);
+    		cprintStatus(STATUS_READY);
+  		} 
+  		else if (param == F("run")) {
+			memcpy(previousEditLine, editLine, 38);
+    		runCode();
+		}
+		else if (param == F("testmem")) {
+    		cls();
+    		cerberus.testMemory();
+    		cprintStatus(STATUS_READY);
+		}
+		else if (param == F("list")) {
+		    cls();
+    		list(getNextParam());
+    		cprintStatus(STATUS_READY);
+		}
+		else if (param == F("move")) {
+			String startAddress = getNextParam();
+			String endAddress = getNextParam();
+			String destAddress = getNextParam();
+    		binMove(startAddress, endAddress, destAddress);		
+		}
+		else if (param == F("basic6502")) {	
+    		cerberus.mode = false;
+			cerberus.cls();
+    		digitalWrite(CPUSLC, LOW);
+    		loadFile("basic65.bin","", false); 
+    		runCode();
+		}
+  		else if (param == F("basicz80")) {
+    		cerberus.mode = true;
+			cerberus.cls();
+    		digitalWrite(CPUSLC, HIGH);
+    		loadFile("basicz80.bin","", false); 
+    		runCode();	
+		}
+		else if (param == F("dir")) {
+			dir();
+		}
+		else if (param == F("del")) { 
+			cprintStatus(fileIO.deleteFile(getNextParam()));
+		}
+		else if (param == F("load")) {
+			String filename = getNextParam();
+			String startAddress = getNextParam();
+    		loadFile(filename, startAddress, false);
+		}
+  		else if (param == F("save")) {
+			String startAddress = getNextParam();
+			String endAddress = getNextParam();
+			String filename = getNextParam();
+		    saveFile(filename, startAddress, endAddress);
+		}
+		else if(param == F("help") || param == F("?")) {
+			help();
+		}
+		else {
+			cprintStatus(STATUS_UNKNOWN_COMMAND);
+		}
+	}
+	if (!cerberus.cpuRunning) {
+	    storePreviousLine();
+	    clearEditLine();
+  	}
 }
 
 void help() {
@@ -538,60 +538,60 @@ void help() {
 }
 
 void binMove(String startAddr, String endAddr, String destAddr) {
-  unsigned int start, finish, destination;                /** Memory addresses **/
-  unsigned int i;                                         /** Address counter **/
-  if (startAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                   /** Missing the file's name **/
-  else {
-    start = strtol(startAddr.c_str(), NULL, 16);          /** Convert hexadecimal address string to unsigned int **/
-    if (endAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                   /** Missing the file's name **/
-    else {
-      finish = strtol(endAddr.c_str(), NULL, 16);         /** Convert hexadecimal address string to unsigned int **/
-      if (destAddr == "") cprintStatus(STATUS_MISSING_OPERAND);                /** Missing the file's name **/
-      else {
-        destination = strtol(destAddr.c_str(), NULL, 16); /** Convert hexadecimal address string to unsigned int **/
-        if (finish < start) cprintStatus(STATUS_ADDRESS_ERROR);              /** Invalid address range **/
-        else if ((destination <= finish) && (destination >= start)) cprintStatus(STATUS_ADDRESS_ERROR); /** Destination cannot be within original range **/  
-        else {
-          for (i = start; i <= finish; i++) {
-            cerberus.poke(destination, cerberus.peek(i));
-            destination++;
-          }
-          cprintStatus(STATUS_READY);
-        }
-      }
-    }
-  }
+	unsigned int start, finish, destination;							// Memory addresses
+	unsigned int i;                                         			// Address counter
+	if (startAddr == "") cprintStatus(STATUS_MISSING_OPERAND);			// Missing the filename
+	else {
+    	start = fromHex(startAddr);          							// Convert hexadecimal address string to unsigned int 
+    	if (endAddr == "") cprintStatus(STATUS_MISSING_OPERAND);        // Missing the start 
+    	else {
+      		finish = fromHex(endAddr);        	 						// Convert hexadecimal address string to unsigned int
+      		if (destAddr == "") cprintStatus(STATUS_MISSING_OPERAND);	// Missing the destination
+      		else {
+        		destination = fromHex(destAddr); 						// Convert hexadecimal address string to unsigned int 
+        		if (finish < start) cprintStatus(STATUS_ADDRESS_ERROR);	// Invalid address range 
+        		else if ((destination <= finish) && (destination >= start)) cprintStatus(STATUS_ADDRESS_ERROR);	// Destination cannot be within original range
+        		else {
+          			for (i = start; i <= finish; i++) {
+            			cerberus.poke(destination, cerberus.peek(i));
+            			destination++;
+          			}
+          			cprintStatus(STATUS_READY);
+        		}
+      		}
+    	}
+  	}
 }
 
 // Lists the contents of memory from the given address, in a compact format 
 //
 void list(String address) {
-  byte  i, j;                      // Just counters 
-  unsigned int addr;             	 // Memory address
-  if (address == "") addr = 0;
-  else addr = strtol(address.c_str(), NULL, 16); /** Convert hexadecimal address string to unsigned int **/
-  for (i = 2; i < 25; i++) {
-    cprintString(3, i, "0x");
-    cprintString(5, i, String(addr, HEX));
-    for (j = 0; j < 8; j++) {
-      cprintString(12+(j*3), i, String(cerberus.peek(addr++), HEX)); /** Print bytes in HEX **/
-    }
-  }
+	byte  i, j;                     // Just counters 
+	unsigned int addr;             	// Memory address
+	if (address == "") addr = 0;
+  	else addr = fromHex(address);	// Convert hexadecimal address string to unsigned int 
+  	for (i = 2; i < 25; i++) {
+	    cprintString(3, i, "0x");
+	    cprintString(5, i, String(addr, HEX));
+	    for (j = 0; j < 8; j++) {
+      		cprintString(12+(j*3), i, String(cerberus.peek(addr++), HEX)); /** Print bytes in HEX **/
+    	}
+  	}
 }
 
 void runCode() {
-  cerberus.cls();
-  cerberus.runCode();
+	cerberus.cls();
+	cerberus.runCode();
 }
 
 void stopCode() {
 	cerberus.stopCode();
-    load("chardefs.bin", 0xf000);		// Reset the character definitions in case the CPU changed them 
-    cerberus.cls();                     // Clear screen completely 
-    cprintFrames();             		// Reprint the wire frame in case the CPU code messed with it
+    fileIO.loadFile("chardefs.bin", 0xf000);	// Reset the character definitions in case the CPU changed them 
+    cerberus.cls();                     		// Clear screen completely 
+    cprintFrames();             				// Reprint the wire frame in case the CPU code messed with it
     cprintBanner();
-    cprintStatus(STATUS_DEFAULT);		// Update status bar
-    clearEditLine();            		// Clear and display the edit line 
+    cprintStatus(STATUS_DEFAULT);				// Update status bar
+    clearEditLine();            				// Clear and display the edit line 
 }
 
 // Lists the files in the root directory of uSD card, if available
@@ -632,25 +632,7 @@ void dir() {
 	}
 }
 
-void catDelFile(String filename) {
-	cprintStatus(delFile(filename));
-}
-
-// Deletes a file from the uSD card 
-//
-int delFile(String filename) {
-	int status = STATUS_DEFAULT;
-  	if (!SD.exists(filename)) {
-		status = STATUS_NO_FILE;								// The file doesn't exist, so stop with error 
-	}
-  	else {
-	    SD.remove(filename);          							// Delete the file
-	    status = STATUS_READY;
-  	}
-	return status;
-}
-
-void catSave(String filename, String startAddress, String endAddress) {
+void saveFile(String filename, String startAddress, String endAddress) {
 	unsigned int startAddr;
 	unsigned int endAddr;
 	int status = STATUS_DEFAULT;
@@ -658,102 +640,32 @@ void catSave(String filename, String startAddress, String endAddress) {
 		status = STATUS_MISSING_OPERAND; 
 	}
 	else {
-		startAddr = strtol(startAddress.c_str(), NULL, 16);
+		startAddr = fromHex(startAddress);
 		if(endAddress == "") {
 			status = STATUS_MISSING_OPERAND;
 		}
 		else {
-			endAddr = strtol(endAddress.c_str(), NULL, 16);
-			status = save(filename, startAddr, endAddr);
+			endAddr = fromHex(endAddress);
+			status = fileIO.saveFile(filename, startAddr, endAddr);
 		}
 	}
 	cprintStatus(status);
 }
 
-// Saves contents of a region of memory to a file on uSD card
-//
-int save(String filename, unsigned int startAddress, unsigned int endAddress) {
-	int status = STATUS_DEFAULT;
-  	unsigned int i;                                     		// Memory address counter
-  	byte data;                                          	// Data from memory
-  	File dataFile;                                      	// File to be created and written to
-	if (endAddress < startAddress) {	
-		status = STATUS_ADDRESS_ERROR;            			// Invalid address range
-	}	
-	else {	
-		if (filename == "") {	
-			status = STATUS_MISSING_OPERAND;          		// Missing the file's name 
-		}	
-		else {	
-			if (SD.exists(filename)) {	
-				status = STATUS_FILE_EXISTS;   				// The file already exists, so stop with error 
-			}
-			else {
-				dataFile = SD.open(filename, FILE_WRITE);	// Try to create the file
-				if (!dataFile) {
-					status = STATUS_CANNOT_OPEN;           	// Cannot create the file 
-				}
-				else {                                    	// Now we can finally write into the created file 
-					for(i = startAddress; i <= endAddress; i++) {
-						data = cerberus.peek(i);
-						dataFile.write(data);
-					}
-					dataFile.close();
-					status = STATUS_READY;
-				}
-			}
-		}
-	}
-	return status;
-}
-
-void catLoad(String filename, String startAddress, bool silent) {
+void loadFile(String filename, String startAddress, bool silent) {
 	unsigned int startAddr;
 	int status = STATUS_DEFAULT;
+
 	if (startAddress == "") {
 		startAddr = ptr_code_start;							// If not otherwise specified, load file into start of code area 
 	}
 	else {
-		startAddr = strtol(startAddress.c_str(), NULL, 16);	// Convert address string to hexadecimal number 
+		startAddr = fromHex(startAddress);					// Convert address string to hexadecimal number 
 	}
-	status = load(filename, startAddr);
+	status = fileIO.loadFile(filename, startAddr);
 	if(!silent) {
 		cprintStatus(status);
 	}
-}
-
-// Loads a binary file from the uSD card into memory
-//
-int load(String filename, unsigned int startAddr) {
-  File dataFile;                                			// File for reading from on SD Card, if present
-  unsigned int addr = startAddr;         		       			// Address where to load the file into memory
-  int status = STATUS_DEFAULT;
-  if (filename == "") {
-	  status = STATUS_MISSING_OPERAND;
-  }
-  else {
-    if (!SD.exists(filename)) {
-		status = STATUS_NO_FILE;							// The file does not exist, so stop with error 
-	} 
-    else {
-      	dataFile = SD.open(filename);           			// Open the binary file 
-      	if (!dataFile) {
-			status = STATUS_CANNOT_OPEN; 					// Cannot open the file 
-	  	}
-      	else {
-        	while (dataFile.available()) {					// While there is data to be read..
-          	cerberus.poke(addr++, byte(dataFile.read()));	// Read data from file and store it in memory 
-          	if (addr == 0) {                    			// Break if address wraps around to the start of memory 
-            	dataFile.close();
-            	break;
-          	}
-        }
-        dataFile.close();
-		status = STATUS_READY;
-      }
-    }
-  }
-  return status;
 }
 
 void cprintEditLine () {
