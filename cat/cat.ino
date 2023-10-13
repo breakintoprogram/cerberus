@@ -132,14 +132,14 @@ void setup() {
     	// SD Card has either failed or is not present
     	// Since the character definitions thus can't be uploaded, accuse error with repeated tone and hang
     	while(true) {
-      		tone(SOUND, 50, 150);
+      		beep();
       		delay(500);
     	}
   	}
   	// Load character defs into memory
 	//
   	if(fileIO.loadFile("chardefs.bin", 0xf000) != STATUS_READY) {
-		tone(SOUND, 50, 150);
+		beep();
 	}
 
   	// Now prepare the screen 
@@ -207,10 +207,8 @@ void loop() {
 		    		exec(&editLine[1]);					// The first character is a ">"
 	    			break;
 	    		case PS2_UPARROW:
+					pos = 0;
 		     	   	for (i = 0; i < 38; i++) editLine[i] = previousEditLine[i];
-	        		i = 0;
-        			while (editLine[i] != 0) i++;
-        			pos = i;
         			cprintEditLine();
         			break;
         		case PS2_DOWNARROW:
@@ -359,6 +357,12 @@ int cmdCatEntry(unsigned int address) {				// Subsequent calls to this will read
 	return STATUS_READY;							// Return READY
 }
 
+// Generic beep
+//
+void beep(void) {
+	tone(SOUND, 50, 150);
+}
+
 // Get the next word from the command line
 //
 String getNextParam() {
@@ -383,9 +387,9 @@ void exec(char * buffer) {
 
 	char *			ptr = buffer;
 
-	ptr = strtok(buffer, " ");
+	ptr = strtok(buffer, " ");								// Fetch the command (first parameter)
 	if(ptr != NULL) {
-		param = String(ptr);
+		param = String(ptr);								// Convert to a lower-case string
 		param.toLowerCase();
 
 		if(param.startsWith("0x")) {
@@ -446,7 +450,7 @@ void exec(char * buffer) {
     		cprintStatus(STATUS_READY);
   		} 
   		else if (param == F("run")) {
-			memcpy(previousEditLine, editLine, 38);
+			storePreviousLine();
     		runCode();
 		}
 		else if (param == F("testmem")) {
@@ -534,7 +538,7 @@ void help() {
     	}
   	}
 	cprintString(3, y++, F("help / ?: Shows this help screen"));
-	cprintString(3, y, F("ESC key: Quits CPU program"));
+	cprintString(3, y, F("F12 key: Quits CPU program"));
 }
 
 void binMove(String startAddr, String endAddr, String destAddr) {
@@ -703,19 +707,19 @@ void cprintStatus(byte status) {
       		break;
     	case STATUS_UNKNOWN_COMMAND:
       		center(F("Darn, unrecognized command"));
-      		tone(SOUND, 50, 150);
+      		beep();
       		break;
     	case STATUS_NO_FILE:
       		center(F("Oops, file doesn't seem to exist"));
-      		tone(SOUND, 50, 150);
+      		beep();
       		break;
     	case STATUS_CANNOT_OPEN:
       		center(F("Oops, couldn't open the file"));
-      		tone(SOUND, 50, 150);
+      		beep();
       		break;
     	case STATUS_MISSING_OPERAND:
       		center(F("Oops, missing an operand!!"));
-      		tone(SOUND, 50, 150);
+      		beep();
       		break;
     	case STATUS_SCROLL_PROMPT:
       		center(F("Press a key to scroll, ESC to stop"));
@@ -797,12 +801,12 @@ void cprintBanner() {
   	byte 	inChar;
 
   	if(!SD.exists(bannerFilename)) {
-		tone(SOUND, 50, 150); 						// Tone out an error if file is not available
+		beep();				 						// Tone out an error if file is not available
 	}
   	else {		
     	File dataFile2 = SD.open(bannerFilename);	// Open the image file
     	if (!dataFile2) {
-			tone(SOUND, 50, 150);     				// Tone out an error if file can't be opened 
+			beep();				     				// Tone out an error if file can't be opened 
 		}
     	else {
       		for (byte y = 2; y <= 25; y++) {
