@@ -3,11 +3,12 @@
 ;		Cerberus 2080 File IO routines
 ; Author:	Dean Belfield
 ; Created:	12/08/2021
-; Last Updated:	06/10/2021
+; Last Updated:	15/10/2023
 ;
 ; Modinfo:
 ; 13/08/2021:	Tweaked error codes
 ; 06/10/2021:	Added DIR command
+; 15/10/2023:	Fixed bug in CAT_FILECMD
 
 			MODULE	CERBERUS_DOS
 
@@ -79,7 +80,9 @@ CAT_FILECMD_3P:		PUSH	IX
 CAT_FILECMD:		LD	B, 60 
 			LD	C, A 			; Store the command #
 1:			LD	A, (HL)
-			CP	CR 			; Files can be terminated by CR (LOAD and SAVE)
+			CP	' '			; Filenames can be terminated by space if followed by a parameter
+			JR	Z, 2F			
+			CP	CR 			; Or CR (LOAD and SAVE)
 			JR	Z, 2F
 			LD	(IX + 0), A 
 			INC	IX 
