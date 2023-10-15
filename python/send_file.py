@@ -45,15 +45,18 @@ while True:
 		if count > 0:
 			s.write(bytes([0x0D]))						# Enter that line
 			startAddress += count						# Update the start address for the next line
-			checksum = F"{chksA:02X}{chksB:02X}"		# Calculate the checksum on this side
+			checksum = F"{chksA << 8 | chksB:X}"		# Calculate the checksum on this side
 			response = s.readline().decode().rstrip()	# Fetch the response
 			count = 0									# Reset for next line
-			print(F"> {response} : {checksum}")
-			if(not response.endswith(checksum)):		# If the checksums don't match then error
-				print("Upload error - mismatched checksum")
+			print(F" > {response} : {checksum}", end="")
+			if not response.endswith(checksum):			# If the checksums don't match then error
+				print(" - Error: Mismatched Checksum")
 				break
-			if not data:								# If there is no more data then
+			elif not data:								# If there is no more data then
+				print(" - End")
 				break									# end
+			else:
+				print(" - OK")
 		chksA = 1										# Reset the checksums
 		chksB = 0
 		reset = False
