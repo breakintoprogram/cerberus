@@ -381,7 +381,7 @@ unsigned int fromHex(String s) {
 // Returns:
 //
 void exec(char * buffer) {
-	String			param;
+	String			param, response;
 	unsigned int	addr;
 	byte 			data, chkA, chkB;
 
@@ -396,6 +396,7 @@ void exec(char * buffer) {
 			chkA = 1;
 			chkB = 0;
 			param.remove(0, 2);								// Strip the leading '0x' from the address
+			response = param;								// Start of the response
 			addr = fromHex(param);							// Convert the address string to an unsigned int
 			param = getNextParam();							// Get the next byte
 			while(param != "") {							// For as long as the user as entered bytes
@@ -420,9 +421,9 @@ void exec(char * buffer) {
 			}
     		#if config_dev_mode == 0
     		cprintStatus(STATUS_READY);
-    		cprintString(28, 27, param);
+    		cprintString(28, 27, response);
     		#endif
-    		Serial.print(param);
+    		Serial.print(response);
     		Serial.print(' ');
     		Serial.println((unsigned int)((chkA << 8) | chkB), HEX);			
 		}
