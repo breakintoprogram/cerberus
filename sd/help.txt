@@ -1,0 +1,19 @@
+basicZ80: shortcut for BASIC Z80
+basic6502: shortcut for BASIC 6502
+0xADDR BYTE: Writes BYTE at ADDR
+list ADDR: Lists memory from ADDR
+cls: Clears the screen
+testmem: Reads/writes to memories
+6502: Switches to 6502 CPU mode
+z80: Switches to Z80 CPU mode
+fast: Switches to 8MHz mode
+slow: Switches to 4MHz mode
+reset: Resets the system
+dir: Lists files on uSD card
+del FILE: Deletes FILE
+load FILE ADDR: Loads FILE at ADDR
+save ADDR1 ADDR2 FILE: Saves memory
+  from ADDR1 to ADDR2 to FILE
+run: Executes code in memory
+move ADDR1 ADDR2 ADDR3: Moves bytes
+  between ADDR1 & ADDR2 to ADDR3
