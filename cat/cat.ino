@@ -86,7 +86,7 @@ const int	chipSelect = CS;
 const int	DataPin = KDAT;
 const int	IRQpin = KCLK;
 
-const char * bannerFilename = "cerbicon.img";
+const char * bannerFilename = "icon2080.img";
 const char * helpFilename = "help.txt";
 
 char editLine[38];							// Current edit line buffer
@@ -514,29 +514,11 @@ void exec(char * buffer) {
 }
 
 void help() {
-	byte x = 3;
-	byte y = 4;
-	byte b;
-	
+	byte y;
+
 	cls();
 	cprintString(3, 2,  F("Commands:"));
-
-  	if(SD.exists(helpFilename)) {
-    	File f = SD.open(helpFilename);		// Open the help file
-    	if (f) {
-			while(f.available()) {
-				b = f.read();
-				if(b >= 32) {
-					cprintChar(x++, y, b);
-				}
-				if(b == 0x0A) {
-					x = 3;
-					y++;
-				}
-			}
-      		f.close();
-    	}
-  	}
+	y = cprintFileToScreen(3, 4, helpFilename);
 	cprintString(3, y++, F("help / ?: Shows this help screen"));
 	cprintString(3, y, F("F12 key: Quits CPU program"));
 }
@@ -794,33 +776,38 @@ void cprintFrames() {
   	}
 }
 
+// Dump a file to screen
+//
+byte cprintFileToScreen(byte x, byte y, String filename) {
+	byte px = x;
+	byte py = y;
+	byte b;
+
+  	if(SD.exists(filename)) {
+    	File f = SD.open(filename);
+    	if (f) {
+			while(f.available()) {
+				b = f.read();
+				switch(b) {
+					case 0x0A:
+						px = x;
+						py++;
+						break;
+					default:
+						cprintChar(px++, py, b);
+						break;
+				}
+			}
+      		f.close();
+    	}
+  	}	
+	return py;
+}
+
 // Load the CERBERUS icon image on the screen
 //
 void cprintBanner() {
-	String	tokenText;
-  	byte 	inChar;
-
-  	if(!SD.exists(bannerFilename)) {
-		beep();				 						// Tone out an error if file is not available
-	}
-  	else {		
-    	File dataFile2 = SD.open(bannerFilename);	// Open the image file
-    	if (!dataFile2) {
-			beep();				     				// Tone out an error if file can't be opened 
-		}
-    	else {
-      		for (byte y = 2; y <= 25; y++) {
-        		for (byte x = 2; x <= 39; x++) {
-	          		tokenText = "";
-          			while (isDigit(inChar = dataFile2.read())) {
-						tokenText += char(inChar);
-					}
-          			cprintChar(x, y, tokenText.toInt());
-        		}
-			}
-      		dataFile2.close();
-    	}
-  	}
+	cprintFileToScreen(2, 2, bannerFilename);
 }
 
 void cprintString(byte x, byte y, String text) {
