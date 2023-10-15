@@ -1,15 +1,14 @@
 
 # cat bios
 
-BBC Basic for Cerberus currently requires a modified version of the standard BIOS to run.
+This version of the Cerberus CAT code has the following features:
 
-The main differences are:
-
-- A handful of compile-time configurations at top of source code
+- Compatible with Cerberus 2080 and Cerberus 2100 with a compile-time switch
+- A handful of compile-time configurations in config.h
 - Serial keyboard input over FTDI
-- Data upload over Serial
+- Data upload over serial
 - 50hz NMI interrupt enabled when CPU is running
-- Boots with Z80 set at 8mhz as default
+- The selected CPU and FAST mode are saved in EEPROM
 - Two-way comms between CAT and CPUs
 - Tweaks to memory map
 	- 0x0200: Outgoing mailbox flag (to CPU)
@@ -17,17 +16,23 @@ The main differences are:
 	- 0x0202: Incoming mailbox flag (from CPU)
 	- 0x0203: Incoming mailbox data (from CPU - word)
 	- 0x0205: Code start
+	- 0xEFFE: Expansion bus data (Cerberus 2100 only)
+	- 0xEFFF: Expansion bus flag (Cerberus 2100 only)
 
 ### Data upload over Serial
 
-There is a sample Powershell script in the [Powershell](Powershell) folder that will upload bin files directly into the Cerberus RAM.
+There is a sample Powershell script in the [Powershell](../powershell) folder that will upload bin files directly into the Cerberus RAM.
 
 ### Prerequisites
 
-As per Alan Toone's 0xFE BIOS, this requires a slightly modified version of Paul Stoffregen's PS2 Keyboard library.
-
-This is included in the source for your convenience within the src subfolder.
+This code requires a slightly modified version of Paul Stoffregen's PS2 Keyboard library, which is included in the source for your convenience within the src subfolder.
 
 ### Compiling
 
-The BIOS can be built as per the standard Cerberus BIOS. Pre-built version of the latest BIOS has been included as `.hex` files, with or without bootloader, and can be uploaded to the CAT with an Arduino hex loader.
+The BIOS can be built as per the standard Cerberus BIOS.
+
+To compile for the Cerberus 2080, change the following line in config.h
+
+```
+#define config_board 1					// 0: Compile for Cerberus 2080, 1: Compile for Cerberus 2100
+```
