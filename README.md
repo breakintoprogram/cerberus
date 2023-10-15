@@ -13,6 +13,9 @@ https://www.thebyteattic.com/p/cerberus-2100.html for the revised Cerberus 2100
 
 - A revised version of the BIOS code (CAT) that runs on the ATmega328p
 - A version of BBC BASIC for Z80 that is customised to run on the Cerberus
+- Files to copy to the SD card (in folder 'sd')
+- Python utlities (in folder 'python')
+- Powershell utilities (in folder 'powershell)
 
 ### Licenses
 
